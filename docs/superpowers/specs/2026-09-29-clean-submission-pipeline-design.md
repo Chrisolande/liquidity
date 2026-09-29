@@ -120,6 +120,24 @@ Final Deliverables:
 - In `src/stages/stage5_meta_stacker.py`, line 332: Replace undefined `best_floor` reference with `FLOOR`.
 - In `src/models/tabpfn_model.py` and pipeline scripts: Eliminate CatBoost fallback branches in TabPFN runner.
 
+### 3.5. In-Model Determinism Enforcement
+- Global random seeding via `seed_everything(seed)`:
+  - Python `random.seed(seed)`
+  - `os.environ["PYTHONHASHSEED"] = str(seed)`
+  - `np.random.seed(seed)`
+  - `torch.manual_seed(seed)`, `torch.cuda.manual_seed_all(seed)`
+- LightGBM:
+  - `random_state=seed, seed=seed, bagging_seed=seed+11, feature_fraction_seed=seed+22, extra_seed=seed+33, data_random_seed=seed+44`
+  - `deterministic=True, force_col_wise=True`
+- CatBoost:
+  - `random_seed=seed`, deterministic categorical processing
+- XGBoost:
+  - `random_state=seed`
+- TabPFN:
+  - `random_state=seed + fold`
+- Cross-Validation:
+  - `StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=seed)`
+
 ---
 
 ## 4. Verification Protocol
@@ -132,3 +150,5 @@ Final Deliverables:
    Verify `submission.csv` contains 30,000 rows, matching `ID`s, non-null values, and probabilities within $[0.0020, 0.9995]$.
 4. **Audit Manifest**:
    Record Git commit, seed, fold count, feature counts per fold, models used, and `LEAKAGE CHECK: PASS`.
+5. **Determinism Verification**:
+   Verify identical prediction outputs across duplicate runs with seed 42.

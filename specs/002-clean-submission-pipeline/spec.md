@@ -99,6 +99,7 @@ As an experimenter verifying pipeline integrity, I need raw out-of-fold and test
 - **FR-011**: The system MUST generate a structured run manifest recording Git commit, seed, fold count, feature counts per fold, model configurations, and component enablement flags.
 - **FR-012**: When TabPFN is enabled, the system MUST execute genuine foundation TabPFN priors across the two canonical sub-views: `pfn_phys` (14 core physics features) and `pfn_champ` (20 features: physics + channel/digital/bank features) using `ignore_pretraining_limits=True`.
 - **FR-013**: The system MUST strictly eliminate any surrogate fallback (such as substituting CatBoost or other decision trees in place of TabPFN). If TabPFN or GPU is unavailable, the pipeline MUST either raise an explicit error or be configured to exclude TabPFN via a transparent configuration flag, never silently falling back to a surrogate model.
+- **FR-014**: The system MUST enforce strict in-model determinism across all frameworks and libraries (Python `random`, `PYTHONHASHSEED`, NumPy, PyTorch, LightGBM `deterministic=True`, `force_col_wise=True`, CatBoost `random_seed`, XGBoost `random_state`, and TabPFN `random_state`), guaranteeing reproducible fold splits, feature selections, and model predictions given a fixed seed.
 
 ### Key Entities
 
@@ -120,6 +121,7 @@ As an experimenter verifying pipeline integrity, I need raw out-of-fold and test
 - **SC-006**: 100% of individual model raw out-of-fold and test predictions are exported and verified prior to any ensembling.
 - **SC-007**: An explicit LEAKAGE CHECK status is documented with PASS verification confirming zero target or validation data contamination.
 - **SC-008**: TabPFN foundation priors, when activated, execute genuine TabPFN models across both `pfn_phys` and `pfn_champ` views with 0% surrogate fallback code paths executed.
+- **SC-009**: The pipeline guarantees in-model determinism such that identical input data and seed produce matching fold assignments, feature screening selections, and identical prediction scores ($\Delta \le 10^{-6}$).
 
 ## Assumptions
 
