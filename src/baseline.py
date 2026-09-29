@@ -16,7 +16,7 @@ import numpy as np
 import pandas as pd
 from catboost import CatBoostClassifier
 from xgboost import XGBClassifier
-from sklearn.ensemble import HistGradientBoostingClassifier
+import lightgbm as lgb
 from scipy.optimize import Bounds, minimize
 from sklearn.model_selection import StratifiedKFold
 
@@ -41,6 +41,40 @@ warnings.filterwarnings("ignore", category=FutureWarning)
 warnings.filterwarnings("ignore", category=pd.errors.PerformanceWarning)
 
 
+def build_composite_strata(df: pd.DataFrame, target_col: str = "Target", n_splits: int = 10) -> pd.Series:
+    """
+    Constructs joint multi-strata cohort keys:
+    Target x Customer Segment x Balance Quartile x Earning Pattern.
+    Groups rare combinations (< n_splits members) into fallback strata.
+    """
+    y_str = df[target_col].astype(str) if target_col in df.columns else pd.Series("0", index=df.index)
+    seg_str = df["segment"].astype(str) if "segment" in df.columns else pd.Series("unk", index=df.index)
+
+    earn_col = None
+    for cand in ["earning_pattern", "financial_earning_indicator"]:
+        if cand in df.columns:
+            earn_col = cand
+            break
+    earn_str = df[earn_col].astype(str) if earn_col else pd.Series("unk", index=df.index)
+
+    bal_col = None
+    for cand in ["m1_daily_avg_bal", "agg_daily_avg_bal_mean", "agg_daily_avg_bal_recent3_to_old3_ratio"]:
+        if cand in df.columns:
+            bal_col = cand
+            break
+    if bal_col:
+        bal_str = pd.qcut(df[bal_col].rank(method="first"), q=4, labels=["q1", "q2", "q3", "q4"]).astype(str)
+    else:
+        bal_str = pd.Series("unk", index=df.index)
+
+    composite = y_str + "_" + seg_str + "_" + bal_str + "_" + earn_str
+    counts = composite.value_counts()
+    rare_strata = counts[counts < n_splits].index
+    if len(rare_strata) > 0:
+        composite = composite.mask(composite.isin(rare_strata), y_str + "_rare")
+    return composite
+
+
 def build_catboost(seed: int = SEED) -> CatBoostClassifier:
     task_type = "GPU" if HAS_GPU else "CPU"
     return CatBoostClassifier(
@@ -49,9 +83,9 @@ def build_catboost(seed: int = SEED) -> CatBoostClassifier:
         iterations=900,
         learning_rate=0.035,
         depth=6,
-        l2_leaf_reg=10.0,
-        random_strength=0.5,
-        bagging_temperature=0.0,
+        l2_leaf_reg=25.0,
+        random_strength=1.0,
+        bagging_temperature=0.25,
         task_type=task_type,
         random_seed=seed,
         verbose=False,
@@ -60,31 +94,38 @@ def build_catboost(seed: int = SEED) -> CatBoostClassifier:
 
 def build_xgboost(seed: int = SEED) -> XGBClassifier:
     return XGBClassifier(
-        n_estimators=600,
+        n_estimators=750,
         learning_rate=0.035,
         max_depth=5,
-        subsample=0.8,
-        colsample_bytree=0.8,
+        subsample=0.80,
+        colsample_bytree=0.70,
+        reg_lambda=5.0,
+        reg_alpha=0.5,
+        min_child_weight=5.0,
         enable_categorical=True,
         tree_method="hist",
         device="cuda" if HAS_GPU else "cpu",
         random_state=seed,
         seed=seed,
         eval_metric="logloss",
+        early_stopping_rounds=75,
     )
 
 
-def build_hist_model(cat_indices: List[int], seed: int = SEED) -> HistGradientBoostingClassifier:
-    return HistGradientBoostingClassifier(
+def build_lightgbm(seed: int = SEED) -> lgb.LGBMClassifier:
+    return lgb.LGBMClassifier(
+        n_estimators=750,
         learning_rate=0.035,
-        max_depth=6,
-        max_iter=350,
-        min_samples_leaf=30,
-        l2_regularization=0.5,
-        categorical_features=cat_indices,
+        max_depth=5,
+        num_leaves=31,
+        min_child_samples=40,
+        subsample=0.80,
+        colsample_bytree=0.70,
+        reg_alpha=0.5,
+        reg_lambda=5.0,
         random_state=seed,
-        early_stopping=True,
-        n_iter_no_change=25,
+        n_jobs=-1,
+        verbose=-1,
     )
 
 
@@ -103,8 +144,8 @@ def fit_fold_model(
             x_train,
             y_train,
             eval_set=(x_valid, y_valid),
-            cat_features=cat_idx,
-            early_stopping_rounds=50,
+            cat_features=cat_idx if cat_idx else None,
+            early_stopping_rounds=75,
             verbose=False,
         )
         return model
@@ -118,13 +159,14 @@ def fit_fold_model(
         )
         return model
 
-    if model_name == "hist_gb":
-        # Convert category dtypes to numeric integer codes for HistGB
-        x_tr_h = x_train.copy()
-        for col in categorical_cols:
-            if col in x_tr_h.columns:
-                x_tr_h[col] = x_tr_h[col].cat.codes.replace(-1, np.nan)
-        model.fit(x_tr_h, y_train)
+    if model_name == "lightgbm":
+        model.fit(
+            x_train,
+            y_train,
+            eval_set=[(x_valid, y_valid)],
+            eval_metric="logloss",
+            callbacks=[lgb.early_stopping(75, verbose=False)],
+        )
         return model
 
     model.fit(x_train, y_train)
@@ -137,12 +179,6 @@ def predict_model_probs(
     X: pd.DataFrame,
     categorical_cols: List[str],
 ) -> np.ndarray:
-    if model_name == "hist_gb":
-        X_h = X.copy()
-        for col in categorical_cols:
-            if col in X_h.columns:
-                X_h[col] = X_h[col].cat.codes.replace(-1, np.nan)
-        return np.clip(model.predict_proba(X_h)[:, 1], FLOOR, CEIL)
     return np.clip(model.predict_proba(X)[:, 1], FLOOR, CEIL)
 
 
@@ -151,6 +187,7 @@ def cross_validate_models(
     test_df: pd.DataFrame,
     numeric_cols: List[str],
     categorical_cols: List[str],
+    strata: pd.Series = None,
     n_splits: int = 10,
     seed: int = SEED,
 ) -> Tuple[pd.DataFrame, pd.DataFrame, Dict[str, Dict[str, float]], Dict[str, List[object]]]:
@@ -166,13 +203,13 @@ def cross_validate_models(
             X[col] = X[col].astype("category")
             X_test[col] = X_test[col].astype("category")
 
-    cat_idx = [X.columns.get_loc(col) for col in categorical_cols if col in X.columns]
     splitter = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=seed)
+    split_target = strata if strata is not None else y
 
     model_builders = {
         "catboost": lambda fold: build_catboost(seed=seed + fold),
         "xgboost": lambda fold: build_xgboost(seed=seed + fold),
-        "hist_gb": lambda fold: build_hist_model(cat_indices=cat_idx, seed=seed + fold),
+        "lightgbm": lambda fold: build_lightgbm(seed=seed + fold),
     }
 
     oof = pd.DataFrame(index=train_df.index)
@@ -187,7 +224,7 @@ def cross_validate_models(
         saved_models[model_name] = []
         fold_scores = []
 
-        for fold, (train_idx, valid_idx) in enumerate(splitter.split(X, y), start=1):
+        for fold, (train_idx, valid_idx) in enumerate(splitter.split(X, split_target), start=1):
             x_train, x_valid = X.iloc[train_idx].copy(), X.iloc[valid_idx].copy()
             y_train, y_valid = y.iloc[train_idx], y.iloc[valid_idx]
 
@@ -279,6 +316,10 @@ def run_baseline(
     X_tr_raw = train_fe.drop(columns=[target_col, ID_COL])
     X_te_raw = test_fe.drop(columns=[c for c in [ID_COL] if c in test_fe.columns])
 
+    # Construct multi-strata joint cohort key to balance difficulty across folds
+    strata = build_composite_strata(train_fe, target_col=target_col, n_splits=n_splits)
+    print(f"Built multi-strata cohort keys ({strata.nunique()} unique strata) for balanced CV splitting", flush=True)
+
     print(f"Step 2: Running feature_engine selection (targeting ~{k_top_features} features)", flush=True)
     X_tr_sel, X_te_sel, selected_features = run_feature_engine_selection(
         X_tr_raw, y_train, X_te_raw, cat_cols=categorical_cols, k_top=k_top_features, corr_threshold=0.98, seed=SEED
@@ -299,7 +340,7 @@ def run_baseline(
         flush=True,
     )
 
-    model_names = ["catboost", "xgboost", "hist_gb"]
+    model_names = ["catboost", "xgboost", "lightgbm"]
     family_oof: Dict[str, List[np.ndarray]] = {m: [] for m in model_names}
     family_test: Dict[str, List[np.ndarray]] = {m: [] for m in model_names}
 
@@ -310,6 +351,7 @@ def run_baseline(
             test_selected,
             active_nums,
             active_cats,
+            strata=strata,
             n_splits=n_splits,
             seed=seed,
         )

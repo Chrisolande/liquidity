@@ -79,18 +79,18 @@ def filter_with_feature_engine(
     dropped_dup = ddf.features_to_drop_
     print(f"feature_engine.DropDuplicateFeatures: dropped {len(dropped_dup)} features", flush=True)
 
-    # Step 3: SmartCorrelatedSelection with correlation to target
+    # Step 3: SmartCorrelatedSelection with variance (unsupervised, zero target leakage)
     scs = SmartCorrelatedSelection(
         variables=list(df_tr_num.columns),
         method="pearson",
         threshold=corr_threshold,
-        selection_method="corr_with_target",
+        selection_method="variance",
         missing_values="ignore",
     )
-    df_tr_num = scs.fit_transform(df_tr_num, y_train)
+    df_tr_num = scs.fit_transform(df_tr_num)
     df_te_num = scs.transform(df_te_num)
     dropped_corr = scs.features_to_drop_
-    print(f"feature_engine.SmartCorrelatedSelection (r>{corr_threshold}): dropped {len(dropped_corr)} features", flush=True)
+    print(f"feature_engine.SmartCorrelatedSelection (r>{corr_threshold}, unsupervised variance): dropped {len(dropped_corr)} features", flush=True)
 
     retained_numeric = list(df_tr_num.columns)
     return df_tr_num, df_te_num, retained_numeric
