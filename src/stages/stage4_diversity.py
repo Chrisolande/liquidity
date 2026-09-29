@@ -50,6 +50,7 @@ def run_stage4(
     output_dir: str = "checkpoints",
     sub_dir: str = "submissions",
     n_splits: int = 10,
+    use_tabpfn: bool = False,
 ) -> float:
     """Executes Stage 4 Diversity Pipeline."""
     print("Stage 4: Diversity Base Learners Pipeline (10-Fold CV)", flush=True)
@@ -196,26 +197,29 @@ def run_stage4(
             print(f"Integrated MultiStrata stream into Grand Teacher from {ms_path}", flush=True)
 
     # 3. TabPFN Non-Tree Foundation Prior Stream
-    pfn_candidates = [
-        os.path.join(output_dir, "tabpfn.npz"),
-        os.path.join("pulled", "tabpfn.npz"),
-        os.path.join(output_dir, "tabpfn_priors.npz"),
-        os.path.join(output_dir, "experiments", "tabpfn_view_sweep.npz"),
-        os.path.join("pulled", "tabpfn_view_sweep.npz"),
-    ]
-    pfn_path = next((p for p in pfn_candidates if os.path.exists(p)), None)
-    if pfn_path:
-        pfn = np.load(pfn_path)
-        for k in ["pfn_phys", "pfn_champ", "tabpfn", "pfn_phys_legacy", "pfn_sweetspot_50", "pfn_solvency_runway"]:
-            oof_k = next((x for x in [f"oof_{k}", f"{k}_oof", k] if x in pfn), None)
-            test_k = next((x for x in [f"test_{k}", f"{k}_test", f"te_{k}"] if x in pfn), None)
-            if oof_k:
-                oof_teacher_dict[k] = pfn[oof_k]
-                if test_k:
-                    test_teacher_dict[k] = pfn[test_k]
-                else:
-                    test_teacher_dict[k] = np.full(n_test, float(pfn[oof_k].mean()))
-                print(f"Integrated TabPFN stream '{k}' into Grand Teacher from {pfn_path}", flush=True)
+    if use_tabpfn:
+        pfn_candidates = [
+            os.path.join(output_dir, "tabpfn.npz"),
+            os.path.join("pulled", "tabpfn.npz"),
+            os.path.join(output_dir, "tabpfn_priors.npz"),
+            os.path.join(output_dir, "experiments", "tabpfn_view_sweep.npz"),
+            os.path.join("pulled", "tabpfn_view_sweep.npz"),
+        ]
+        pfn_path = next((p for p in pfn_candidates if os.path.exists(p)), None)
+        if pfn_path:
+            pfn = np.load(pfn_path)
+            for k in ["pfn_phys", "pfn_champ", "tabpfn", "pfn_phys_legacy", "pfn_sweetspot_50", "pfn_solvency_runway"]:
+                oof_k = next((x for x in [f"oof_{k}", f"{k}_oof", k] if x in pfn), None)
+                test_k = next((x for x in [f"test_{k}", f"{k}_test", f"te_{k}"] if x in pfn), None)
+                if oof_k:
+                    oof_teacher_dict[k] = pfn[oof_k]
+                    if test_k:
+                        test_teacher_dict[k] = pfn[test_k]
+                    else:
+                        test_teacher_dict[k] = np.full(n_test, float(pfn[oof_k].mean()))
+                    print(f"Integrated TabPFN stream '{k}' into Grand Teacher from {pfn_path}", flush=True)
+    else:
+        print("[Stage 4] Skipping TabPFN priors inclusion (use_tabpfn=False).", flush=True)
 
     # Blend teacher predictions to obtain soft pseudo labels
     if oof_teacher_dict:

@@ -54,7 +54,7 @@ def main():
             print("\n>>> [Stage 3: TabPFN] Skipped during '--stage all' to accelerate iterations. Use --enable-stage3 to run.")
             run_stage3(train_path=args.train, test_path=args.test, enabled=False)
     if stage in ["4", "all"]:
-        run_stage4(train_path=args.train, test_path=args.test)
+        run_stage4(train_path=args.train, test_path=args.test, use_tabpfn=args.enable_stage3)
     if stage in ["5", "all"]:
         run_stage5(test_path=args.test, use_tabpfn=args.enable_stage3)
     if stage in ["audit", "all"]:

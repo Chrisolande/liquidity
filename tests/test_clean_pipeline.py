@@ -114,6 +114,19 @@ def test_stage5_artifact_pairing_and_tabpfn_flag():
     assert sig.parameters["use_tabpfn"].default is False
 
 
+def test_stage4_tabpfn_flag_defaults_false():
+    """Verify that Stage 4 defaults TabPFN inclusion to False and gates candidate loading."""
+    import inspect
+    from src.stages import stage4_diversity
+
+    sig = inspect.signature(stage4_diversity.run_stage4)
+    assert sig.parameters["use_tabpfn"].default is False
+
+    src = inspect.getsource(stage4_diversity.run_stage4)
+    assert "if use_tabpfn:" in src
+    assert "Skipping TabPFN priors inclusion (use_tabpfn=False)" in src
+
+
 def test_stage5_meta_features_alignment():
     """Verify that Stage 5 meta-features have identical lengths, non-empty columns, and probabilities within valid bounds."""
     n_train = 50
