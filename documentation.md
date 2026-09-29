@@ -89,21 +89,39 @@ flowchart TD
 - **TabPFN**: Chunked foundation model priors on 14 Physics and 20 Champion feature views.
 - **PyTorch TabMLP**: 2-layer MLP (`BatchNorm1d` $\to$ `Linear(256)` $\to$ `BatchNorm1d` $\to$ `GELU` $\to$ `Dropout(0.25)` $\to$ `Linear(128)` $\to$ `BatchNorm1d` $\to$ `GELU` $\to$ `Linear(1)`), trained via AdamW ($lr=1e-3$, weight decay $1e-4$) with BCEWithLogitsLoss.
 
-### Validation Scheme
-- Stratified 5-Fold and 10-Fold Cross-Validation.
-- Inner 5-fold cross-validation for all supervised categorical target encodings to guarantee zero target leakage.
+### Validation Architectures: Clean vs. Tournament Pipeline
+
+#### 1. Clean Leak-Free Pipeline (`src/clean_pipeline.py`)
+- **Strict Fold-Local Screening**: Every feature selection screen is fitted exclusively using the current outer fold's training slice (36,000 rows), ensuring the validation slice (4,000 rows) is never seen during selection.
+- **Strict Fold-Local Target Encoding**: Categorical target encodings are fitted only on outer fold training partitions.
+- **Pure Evaluation Protocol**: Zero pseudo-labeling, zero temperature sharpening ($T=1.0$), zero prevalence forcing.
+- **Bounded Regularized Blending**: Optimizes weights using L2-regularized log-loss rather than greedy discrete metric hill-climbing.
+- **Assertion Gates**: Asserts complete out-of-fold coverage (`assert oof_covered.all()`) and writes an audit manifest to `artifacts/experiment.json` with `"leakage_audit_status": "PASS"`.
+
+#### 2. Tournament Multi-Stage Pipeline (`src/stages/`)
+- **Stage 1 (General Baseline Champion)**: Produces the baseline anchor with multi-seed averaging and metric-direct hill climbing.
+- **Stage 2 (Independent Domain GBDT Zoo)**: Trains domain-specialized models (`cb_d7_dom26`, `cb_d6_dom35`, `xgb_d4_dom35`, `xgb_d4_triage`, `lgb_extra`) strictly independently without the Stage 1 anchor as a blend member.
+- **Stage 3 (Dual TabPFN Foundation Priors)**: Non-tree foundation representations on GPU with fast-iteration execution toggle (`ENABLE_STAGE3`).
+- **Stage 4 (Diversity & Distillation)**: MultiStrata 5-fold stratification, 10-fold teacher-student distillation, and PyTorch TabMLP.
+- **Stage 5 (Grand-Teacher Meta-Stacker)**: The primary point of convergence where Stage 1 general champion and Stage 2 independent domain zoo meet through genuine OOF predictions.
 
 ---
 
-## 5. Inference
+## 5. Inference & Notebook Reproduction
 
-- **Execution Mode**: Offline batch inference.
-- **Inference Pipeline**:
-  1. Transforms test data using transductively fitted frequency maps and train-isolated target encodings.
-  2. Evaluates out-of-fold blended models across all folds.
-  3. Applies post-hoc 5-fold cross-calibrated isotonic probability scaling.
-  4. Generates dual-format submissions: `TargetLogLoss` and `TargetRAUC`.
-- **Reproducibility**: Global deterministic seeds (`SEED = 42`) set across NumPy, Python random, PyTorch, and CUDA backends.
+### Primary Notebook: `pipeline_reproduction.ipynb`
+The notebook provides two primary execution paths:
+- **Execution Toggles**:
+  - `SINGLE_SEED_MODE`: Set to `True` for rapid single-seed iteration (seed 42); set to `False` for multi-seed tournament averaging (seeds 42, 2026).
+  - `ENABLE_STAGE3`: Set to `False` to bypass heavy TabPFN training (~2h); set to `True` for full TabPFN foundation priors.
+- **Section A (Clean Pipeline)**:
+  - Runs `run_clean_pipeline(...)` in ~8–10 minutes.
+  - Streams real-time per-model metrics, stopped iterations, fold equal-blend, and running cumulative OOF.
+  - Automatically exports `submissions/submission_clean.csv` and `submissions/submission.csv`.
+  - **Running the Setup Cell + Section A is all that is required for the final competition submission.**
+- **Section B (Tournament Reproduction)**:
+  - Executes Stages 1 through 7 for full tournament stack replication.
+  - Stage 1 and Stage 2 run independently and meet at Stage 5 to produce `submissions/submission_stage5_final.csv`.
 
 ---
 

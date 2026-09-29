@@ -9,13 +9,16 @@ End-to-end machine learning pipeline for predicting customer 30-day liquidity st
 2. [Directory Structure](#directory-structure)
 3. [Prerequisites & Installation](#prerequisites--installation)
 4. [Dataset Preparation](#dataset-preparation)
-5. [How to Run End-to-End](#how-to-run-end-to-end)
-   - [Single-Command Execution](#1-single-command-end-to-end)
-   - [Stage-by-Stage Execution](#2-stage-by-stage-modular-execution)
-   - [Execution Budgets (`LSEW_BUDGET`)](#3-execution-budgets)
-6. [Audit & Verification](#audit--verification)
-7. [Remote Kaggle Execution](#remote-kaggle-execution)
-8. [Hardware & Runtime Estimates](#hardware--runtime-estimates)
+5. [Two Execution Paths](#two-execution-paths)
+   - [Path A: Clean Leak-Free Pipeline (Recommended for Final Submission)](#path-a-clean-leak-free-pipeline-recommended)
+   - [Path B: Tournament Multi-Stage Pipeline (Stages 1-5)](#path-b-tournament-multi-stage-pipeline-stages-1-5)
+6. [Kaggle & Jupyter Notebook Guide (`pipeline_reproduction.ipynb`)](#kaggle--jupyter-notebook-guide-pipeline_reproductionipynb)
+   - [Interactive Toggles](#execution-mode-toggles)
+   - [Section A vs. Section B](#section-a-vs-section-b)
+7. [Why Clean Validation Differs From Old Baseline](#why-clean-validation-differs-from-old-baseline)
+8. [Audit & Verification](#audit--verification)
+9. [Remote Kaggle Execution](#remote-kaggle-execution)
+10. [Hardware & Runtime Estimates](#hardware--runtime-estimates)
 
 ---
 
@@ -106,85 +109,99 @@ Expected dimensions:
 
 ---
 
-## How to Run End-to-End
+## Two Execution Paths
 
-### 1. Single-Command End-to-End
-To run the entire pipeline through feature extraction, base models, foundation priors, distillation, stacking, and submission generation:
+This repository provides two distinct, well-documented pipelines:
 
+### Path A: Clean Leak-Free Pipeline (Recommended)
+Designed for scientifically defensible, leak-free validation and the official final competition submission:
+- **Strict Fold-Local Feature Screening**: All feature selection (mutual information) is fitted strictly inside the training fold (36,000 rows). The 4,000 validation rows are never touched during screening.
+- **Strict Fold-Local Target Encoding**: Encoders are trained exclusively on outer fold training partitions.
+- **Zero Test Manipulation**: Zero pseudo-labeling, zero temperature sharpening ($T=1.0$), zero target-mean prevalence forcing.
+- **Regularized Bounded Blending**: Blends domain GBDTs using L2-regularized bounded optimization rather than greedy OOF hill-climbing.
+- **Audited Manifest**: Exports an audit manifest with 100% OOF validation assertions.
+
+**Run via CLI:**
 ```bash
-python3 src/main.py --stage all --train path/to/Train.csv --test path/to/Test.csv
+# Fast single-seed run (~8-10 minutes on GPU)
+python3 -m src.clean_pipeline --seed 42 --n_splits 10
+
+# Multi-seed tournament ensemble (seeds 42 and 2026)
+python3 -m src.clean_pipeline --seeds 42 2026 --n_splits 10
 ```
 
-Outputs will be saved to:
-- Checkpoints & out-of-fold predictions: `checkpoints/`
-- Final submission CSVs: `submissions/`
+**Deliverables:**
+- Clean submission: `submissions/submission_clean.csv` (and copied to `submissions/submission.csv`)
+- Experiment audit manifest: `artifacts/experiment.json` (includes `"leakage_audit_status": "PASS"`)
+- Raw OOF arrays: `artifacts/oof_clean.npy` and `artifacts/test_clean.npy`
 
 ---
 
-### 2. Stage-by-Stage Modular Execution
-You can run individual stages sequentially:
+### Path B: Tournament Multi-Stage Pipeline (Stages 1-5)
+Preserves the complete experimental tournament architecture:
+- **Stage 1 (Baseline Anchor & Hill-Climbing)**: CatBoost + XGBoost + HistGB baseline anchor followed by metric-direct stepwise hill climbing.
+- **Stage 2 (Independent Domain GBDT Zoo)**: Independent domain learners (`cb_d7_dom26`, `cb_d6_dom35`, `xgb_d4_dom35`, `xgb_d4_triage`, `lgb_extra`) trained with fold-local screening and decoupled from the Stage 1 anchor.
+- **Stage 3 (TabPFN Foundation Priors)**: Genuine foundation TabPFN execution on physical and champion feature views with execution toggle.
+- **Stage 4 (Diversity & Distillation)**: MultiStrata 5-fold iterative stratification, 10-fold teacher-student distillation, and PyTorch TabMLP.
+- **Stage 5 (Grand-Teacher Meta-Stacker)**: The primary meeting point where Stage 1 anchor, Stage 2 domain zoo, Stage 3, and Stage 4 OOF predictions interact through L2 regularized logit-space meta-stacking and cross-fitted Platt calibration.
 
-#### **Stage 1: Baseline Champion Reproduction**
-Extracts baseline features and trains the benchmark CatBoost + HistGB ensemble:
+**Run via CLI:**
 ```bash
-python3 src/main.py --stage 1 --train path/to/Train.csv --test path/to/Test.csv
-```
-*Artifacts*: `checkpoints/oof_champ_train.npy`, `submissions/submission_best_0.73731.csv`
+# Fast run (Stages 1, 2, 4, 5 — skips slow 2h TabPFN):
+python3 src/main.py --stage all
 
-#### **Stage 2: Multi-Seed 10-Fold GBDT Zoo**
-Trains CatBoost, XGBoost, and LightGBM across multiple random seeds with iterative stratification:
-```bash
-python3 src/main.py --stage 2 --train path/to/Train.csv --test path/to/Test.csv
-```
-*Artifacts*: `checkpoints/gbdt_zoo_4seed.npz`, `submissions/submission_s2_gbdt_zoo_0.73733.csv`
+# Full run including Stage 3 TabPFN (~2.5 hours):
+python3 src/main.py --stage all --enable-stage3
 
-#### **Stage 3: TabPFN Foundation Priors**
-Fits chunked prior models on physics and domain feature views:
-```bash
-python3 src/main.py --stage 3 --train path/to/Train.csv --test path/to/Test.csv
+# Run individual stages:
+python3 src/main.py --stage 1
+python3 src/main.py --stage 2
+python3 src/main.py --stage 3  # TabPFN
+python3 src/main.py --stage 4
+python3 src/main.py --stage 5
 ```
-*Artifacts*: `checkpoints/tabpfn.npz`
-
-#### **Stage 4: Distillation Students & TabMLP**
-Computes soft teacher pseudo-labels with temperature sharpening ($T=0.85$) and trains regression students alongside PyTorch TabMLP:
-```bash
-python3 src/main.py --stage 4 --train path/to/Train.csv --test path/to/Test.csv
-```
-*Artifacts*: `checkpoints/diversity_stage4.npz`
-
-#### **Stage 5: Meta-Stacker, Hill Climbing & Final Blending**
-Blends all out-of-fold prediction streams using Nelder-Mead and hill-climbing optimization, followed by Platt/Isotonic probability calibration:
-```bash
-python3 src/main.py --stage 5 --test path/to/Test.csv
-```
-*Artifacts*: `submissions/submission_stage5_meta_stacker.csv` and calibrated deliverables.
 
 ---
 
-### 3. Execution Budgets
+## Kaggle & Jupyter Notebook Guide (`pipeline_reproduction.ipynb`)
 
-Control the training depth and runtime using the `LSEW_BUDGET` environment variable:
+The primary reproduction notebook is [`pipeline_reproduction.ipynb`](pipeline_reproduction.ipynb).
 
-```bash
-# Smoke test (quick sanity check on 3 folds, ~1 minute)
-LSEW_BUDGET=smoke python3 src/main.py --stage all
+### Execution Mode Toggles
+At the top of the notebook (Cell 1), two interactive toggles control execution:
+```python
+# 1. Single-Seed Mode:
+# Set to True for rapid iteration (seed 42 only, ~8-10 min).
+# Set to False for full tournament multi-seed averaging (seeds 42, 2026).
+SINGLE_SEED_MODE = True
 
-# Fast preset (5-fold, 2 seeds, reduced iterations, ~15-20 minutes on GPU)
-LSEW_BUDGET=fast python3 src/main.py --stage all
-
-# Balanced preset (10-fold, 3 seeds, TabPFN enabled, ~1.5 hours on GPU)
-LSEW_BUDGET=balanced python3 src/main.py --stage all
-
-# Max production preset (10-fold, 4 seeds, full feature set, ~3.5 hours on GPU)
-LSEW_BUDGET=max python3 src/main.py --stage all
+# 2. Stage 3 (TabPFN) Toggle:
+# Set to False to skip TabPFN foundation training and iterate rapidly.
+# Set to True when ready to run full GPU TabPFN training (~2h).
+ENABLE_STAGE3 = False
 ```
 
-| Budget | Folds | GBDT Seeds | TabPFN | TabMLP | Screened Features | Typical GPU Runtime |
-| :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| `smoke` | 3 | 1 (42) | No | No | 30 | ~1 min |
-| `fast` | 5 | 2 (42, 100) | No | Yes (12 ep) | 80 | ~15-20 min |
-| `balanced` | 10 | 3 (42, 100, 2024) | Yes (2 views) | Yes (25 ep) | 120 | ~1.5 hours |
-| `max` | 10 | 4 (42, 100, 2024, 777) | Yes (3 views) | Yes (40 ep) | Full (All) | ~3.5 hours |
+### Section A vs. Section B
+
+| Notebook Section | Purpose | Runtime | When to Run | Output |
+| :--- | :--- | :---: | :--- | :--- |
+| **Section A: Clean Leak-Free Pipeline** | Complete self-contained 10-fold CV, fold-local screening, regularized blending, live metrics | ~8-10 min | **For the final, clean competition submission** | `submissions/submission_clean.csv`<br>`submissions/submission.csv` |
+| **Section B: Tournament Reproduction** | Stages 1 through 7 (Baseline, GBDT Zoo, TabPFN, Distillation, Meta-Stacker, Audit) | ~12 min (with TabPFN skipped) or ~2.5h | To reproduce the experimental multi-stage tournament models | `submissions/submission_stage5_final.csv` |
+
+> **Key Takeaway**: You do **not** need to run Section B if you only want the clean submission. Running the **Setup Cell** + **Section A** generates the complete, verified, leak-free submission and experiment manifest.
+
+---
+
+## Why Clean Validation Differs From Old Baseline
+
+You may observe that the Clean Pipeline reports a composite OOF score of **~0.732–0.733** (single-seed) or **~0.735–0.736** (multi-seed), compared to the old baseline's single-seed ~0.735:
+
+1. **Honest Fold-Local Screening vs. Global 40k Screening (~+0.002 bias eliminated)**:
+   In the old baseline, feature screening was performed on all 40,000 rows globally before splitting folds. The validation fold targets leaked into the feature selection. The clean pipeline screens features exclusively using the current fold's training slice.
+2. **Regularized Log-Loss vs. Direct OOF Hill-Climbing (~+0.002 bias eliminated)**:
+   The old baseline ran greedy SLSQP directly against `-comp` on the same 40k OOF predictions it reported. The clean pipeline uses L2-regularized bounded blending, avoiding blend-weight overfitting.
+3. **Single-Seed vs. Multi-Seed Averaging (~+0.003 difference)**:
+   Averaging tree predictions across seeds `(42, 2026)` reduces variance and boosts score by ~0.003–0.004. Running with `SINGLE_SEED_MODE = False` applies this boost cleanly without any data leakage.
 
 ---
 
