@@ -27,6 +27,7 @@ from sklearn.model_selection import StratifiedKFold
 
 from src.config import (
     SEED,
+    ACTIVE_SEEDS,
     N_SPLITS,
     TARGET,
     ID_COL,
@@ -156,7 +157,12 @@ def run_stage1_hillclimb(
     sub_dir: str = "submissions",
     k_top_features: int = 60,
     n_splits: int = 10,
+    seeds: Sequence[int] = None,
 ) -> Tuple[float, np.ndarray, np.ndarray]:
+    if seeds is None:
+        seeds = ACTIVE_SEEDS
+    seeds = tuple(seeds)
+
     os.makedirs(output_dir, exist_ok=True)
     os.makedirs(sub_dir, exist_ok=True)
 
@@ -217,11 +223,11 @@ def run_stage1_hillclimb(
     model_specs = [
         (
             "cb_tuned_d7_ms",
-            "CatBoost GPU Tuned Depth 7 (Multi-Seed [42, 2026])",
+            f"CatBoost GPU Tuned Depth 7 ({len(seeds)}-Seed {list(seeds)})",
             lambda xtr, ytr, xva, yva, xte: run_tuned_catboost_ms(
                 xtr, ytr, xva, yva, xte, active_cats,
                 {"depth": 7, "learning_rate": 0.035, "l2_leaf_reg": 25.0, "random_strength": 1.0, "iterations": 900},
-                seeds=[42, 2026],
+                seeds=list(seeds),
             ),
         ),
         (

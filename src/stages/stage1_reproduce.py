@@ -44,6 +44,7 @@ def run_stage1(
         sub_dir=sub_dir,
         k_top_features=k_top_features,
         n_splits=n_splits,
+        seeds=seeds,
     )
     print(f"Stage 1 final score: Comp={final_comp:.5f}\n", flush=True)
     return final_comp
