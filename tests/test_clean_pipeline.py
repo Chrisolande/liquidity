@@ -191,4 +191,29 @@ def test_clean_pipeline_execution_smoke(tmp_path, monkeypatch):
     assert meta["fold_local_feature_selection"] is True
 
 
+def test_stage3_toggle_bypasses_execution(tmp_path):
+    """Verify that Stage 3 TabPFN can be toggled off to avoid expensive fitting."""
+    from src.config import set_stage3_mode, ENABLE_STAGE3
+    from src.stages.stage3_tabpfn_priors import run_stage3
+
+    # Toggle off
+    active = set_stage3_mode(False)
+    assert active is False
+
+    # Calling run_stage3 with enabled=False should return immediately without fitting
+    score = run_stage3(
+        output_dir=str(tmp_path / "checkpoints"),
+        sub_dir=str(tmp_path / "submissions"),
+        enabled=False,
+    )
+    # Returns immediately without fitting; returns cached score (0.73) if pulled/tabpfn.npz exists or 0.0 otherwise
+    assert score in (0.0, 0.73)
+
+    # Toggle back on
+    active = set_stage3_mode(True)
+    assert active is True
+    # Reset to default
+    set_stage3_mode(False)
+
+
 

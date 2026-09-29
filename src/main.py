@@ -31,6 +31,12 @@ def main():
     )
     parser.add_argument("--train", type=str, default=None, help="Path to raw Train.csv")
     parser.add_argument("--test", type=str, default=None, help="Path to raw Test.csv")
+    parser.add_argument(
+        "--enable-stage3",
+        action="store_true",
+        default=False,
+        help="Enable heavy TabPFN Foundation training in Stage 3 (default: False to save time)",
+    )
     args = parser.parse_args()
 
     stage = args.stage.lower()
@@ -39,8 +45,14 @@ def main():
         run_stage1(train_path=args.train, test_path=args.test)
     if stage in ["2", "all"]:
         run_stage2(train_path=args.train, test_path=args.test)
-    if stage in ["3", "all"]:
-        run_stage3(train_path=args.train, test_path=args.test)
+    if stage == "3":
+        run_stage3(train_path=args.train, test_path=args.test, enabled=True)
+    elif stage == "all":
+        if args.enable_stage3:
+            run_stage3(train_path=args.train, test_path=args.test, enabled=True)
+        else:
+            print("\n>>> [Stage 3: TabPFN] Skipped during '--stage all' to accelerate iterations. Use --enable-stage3 to run.")
+            run_stage3(train_path=args.train, test_path=args.test, enabled=False)
     if stage in ["4", "all"]:
         run_stage4(train_path=args.train, test_path=args.test)
     if stage in ["5", "all"]:

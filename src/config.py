@@ -30,6 +30,17 @@ def set_seed_mode(single_seed: bool = True) -> Tuple[int, ...]:
     return ACTIVE_SEEDS
 
 
+# Stage 3 (TabPFN) Execution Toggle (defaults to False to avoid 2h training during fast iteration)
+ENABLE_STAGE3: bool = os.environ.get("LSEW_ENABLE_STAGE3", "0") == "1"
+
+
+def set_stage3_mode(enable: bool = False) -> bool:
+    """Toggle Stage 3 (TabPFN Foundation Priors) on or off globally."""
+    global ENABLE_STAGE3
+    ENABLE_STAGE3 = enable
+    return ENABLE_STAGE3
+
+
 # Budget Presets
 BUDGET: str = os.environ.get("LSEW_BUDGET", "fast").lower()
 

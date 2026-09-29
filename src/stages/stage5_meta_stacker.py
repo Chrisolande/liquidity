@@ -33,6 +33,7 @@ def run_stage5(
     ckpt_dir: str = "checkpoints",
     sub_dir: str = "submissions",
     test_path: str = None,
+    use_tabpfn: bool = True,
 ) -> float:
     """Executes upgraded Stage 5 Logit-Space L2 Meta-Stacker, Hill Climbing, and final verification."""
     print("=" * 80)
@@ -179,21 +180,24 @@ def run_stage5(
             test_dict["multistrata"] = ms[k_te]
 
     # 5. TabPFN Priors
-    pfn_candidates = [
-        os.path.join(ckpt_dir, "tabpfn.npz"),
-        os.path.join("pulled", "tabpfn.npz"),
-        os.path.join(ckpt_dir, "tabpfn_priors.npz"),
-        os.path.join("pulled", "tabpfn_priors.npz"),
-    ]
-    pfn_p = next((p for p in pfn_candidates if os.path.exists(p)), None)
-    if pfn_p:
-        pfn = np.load(pfn_p)
-        for k in ["tabpfn", "pfn_phys", "pfn_champ"]:
-            oof_k = next((x for x in [f"oof_{k}", k] if x in pfn), None)
-            test_k = next((x for x in [f"test_{k}", "test_tabpfn"] if x in pfn), None)
-            if oof_k and test_k:
-                oof_dict[f"pfn_{k}"] = pfn[oof_k]
-                test_dict[f"pfn_{k}"] = pfn[test_k]
+    if use_tabpfn:
+        pfn_candidates = [
+            os.path.join(ckpt_dir, "tabpfn.npz"),
+            os.path.join("pulled", "tabpfn.npz"),
+            os.path.join(ckpt_dir, "tabpfn_priors.npz"),
+            os.path.join("pulled", "tabpfn_priors.npz"),
+        ]
+        pfn_p = next((p for p in pfn_candidates if os.path.exists(p)), None)
+        if pfn_p:
+            pfn = np.load(pfn_p)
+            for k in ["tabpfn", "pfn_phys", "pfn_champ"]:
+                oof_k = next((x for x in [f"oof_{k}", k] if x in pfn), None)
+                test_k = next((x for x in [f"test_{k}", "test_tabpfn"] if x in pfn), None)
+                if oof_k and test_k:
+                    oof_dict[f"pfn_{k}"] = pfn[oof_k]
+                    test_dict[f"pfn_{k}"] = pfn[test_k]
+    else:
+        print("[Stage 5] Skipping TabPFN priors inclusion (use_tabpfn=False).")
 
     # 6. Distillation Students
     dist_candidates = [
