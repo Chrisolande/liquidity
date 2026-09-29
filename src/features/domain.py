@@ -380,3 +380,99 @@ def add_chris_deotte_features(df: pd.DataFrame) -> Tuple[pd.DataFrame, List[str]
 
     df_out = pd.concat([df, pd.DataFrame(feature_data, index=df.index)], axis=1)
     return df_out, all_cats
+
+
+def engineer_anti_fn_liquidity_features(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Anti-False-Negative Liquidity & Runway Collapse Features:
+    Targets the 986 catastrophic false negative accounts identified in error forensics.
+    1. Runway Collapse Velocity (Months of cash remaining before zero)
+    2. Normalized Liquidity Bleed Rate
+    3. Inflow Shock Multiplier
+    4. Critical Buffer Breach Flag
+    5. Inflow-to-Outflow Burn Acceleration
+    6. Solvency Cushion Cliff
+    7. Consecutive 3-Month Cash Hemorrhage Flag
+    8. Multi-Month Cushion Wipeout Rate (m5 -> m1)
+    9. Deposit Agent Network Attrition
+    """
+    eps = 1e-6
+    feature_data: Dict[str, np.ndarray] = {}
+
+    # Ensure recent3 and old3 balances exist
+    recent_bal_series = (
+        df["agg_daily_avg_bal_recent3"]
+        if "agg_daily_avg_bal_recent3" in df.columns
+        else (df["m1_daily_avg_bal"] + df["m2_daily_avg_bal"] + df["m3_daily_avg_bal"]) / 3.0
+    )
+    old_bal_series = (
+        df["agg_daily_avg_bal_old3"]
+        if "agg_daily_avg_bal_old3" in df.columns
+        else (df["m4_daily_avg_bal"] + df["m5_daily_avg_bal"] + df["m6_daily_avg_bal"]) / 3.0
+    )
+    feature_data["agg_daily_avg_bal_recent3"] = recent_bal_series.to_numpy(dtype=float)
+    feature_data["agg_daily_avg_bal_old3"] = old_bal_series.to_numpy(dtype=float)
+
+    # 1. Runway Collapse Velocity (Months of cash remaining before zero)
+    recent_bal = np.maximum(recent_bal_series.to_numpy(dtype=float), 0.0)
+    net_burn = -df["agg_recent3_net_cashflow"].to_numpy(dtype=float)  # positive when actively bleeding cash
+    feature_data["stress_burn_runway_months"] = np.clip(
+        np.where(net_burn > 0, recent_bal / (net_burn / 3.0 + eps), 999.0),
+        0.0,
+        36.0,
+    )
+
+    # 2. Normalized Liquidity Bleed Rate
+    old_bal = np.maximum(old_bal_series.to_numpy(dtype=float), 10.0)
+    bal_drop = df["agg_daily_avg_bal_recent3_minus_old3"].to_numpy(dtype=float)
+    feature_data["stress_balance_bleed_intensity"] = np.clip(bal_drop / old_bal, -10.0, 10.0)
+
+    # 3. Inflow Shock Multiplier
+    feature_data["stress_inflow_deficit_interaction"] = (
+        df["stress_inflow_drop_pct"].to_numpy(dtype=float)
+        * np.sign(df["agg_recent3_net_cashflow"].to_numpy(dtype=float))
+    )
+
+    # 4. Critical Buffer Breach Flag (Boolean turned float)
+    feature_data["flag_critical_liquidity_breach"] = (
+        (feature_data["stress_burn_runway_months"] < 2.0) & (bal_drop < 0.0)
+    ).astype(float)
+
+    # 5. Inflow-to-Outflow Burn Acceleration
+    feature_data["stress_inflow_outflow_divergence"] = np.clip(
+        df["stress_recent3_inflow_to_outflow"].to_numpy(dtype=float) - 1.0,
+        -5.0,
+        5.0,
+    )
+
+    # 6. Solvency Cushion Cliff
+    feature_data["stress_cushion_cliff_ratio"] = np.clip(
+        df["solv_cushion_drop_pct"].to_numpy(dtype=float)
+        / (df["solv_cushion_collapse_ratio"].to_numpy(dtype=float) + eps),
+        -50.0,
+        50.0,
+    )
+
+    # 7. Consecutive 3-Month Cash Hemorrhage
+    if "solv_net_m1" in df.columns and "solv_net_m2" in df.columns and "solv_net_m3" in df.columns:
+        feature_data["stress_consecutive_burn_flag"] = (
+            (df["solv_net_m1"].to_numpy(dtype=float) < 0)
+            & (df["solv_net_m2"].to_numpy(dtype=float) < 0)
+            & (df["solv_net_m3"].to_numpy(dtype=float) < 0)
+        ).astype(float)
+
+    # 8. Multi-Month Cushion Wipeout Rate (m5 -> m1)
+    if "solv_cushion_m5" in df.columns and "solv_cushion_m1" in df.columns:
+        cush_m5 = df["solv_cushion_m5"].to_numpy(dtype=float)
+        cush_m1 = df["solv_cushion_m1"].to_numpy(dtype=float)
+        feature_data["stress_cushion_wipeout_m5_m1"] = np.clip(
+            (cush_m5 - cush_m1) / (np.abs(cush_m5) + eps), -10.0, 10.0
+        )
+
+    # 9. Deposit Agent Network Attrition
+    if "m1_deposit_agents" in df.columns and "m3_deposit_agents" in df.columns:
+        feature_data["stress_deposit_agent_attrition"] = (
+            df["m3_deposit_agents"].to_numpy(dtype=float) - df["m1_deposit_agents"].to_numpy(dtype=float)
+        )
+
+    return pd.concat([df, pd.DataFrame(feature_data, index=df.index)], axis=1)

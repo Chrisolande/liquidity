@@ -38,10 +38,28 @@ except ImportError:
 
 from src.config import CHAMPION_14, MACRO_SOLVENCY_10, MACRO_TRIAGE_10, SEED, TARGET, ID_COL
 
+PROTECTED_STRESS_FEATURES = [
+    "agg_daily_avg_bal_recent3_minus_old3",
+    "agg_daily_avg_bal_recent3_to_old3_ratio",
+    "agg_daily_avg_bal_slope",
+    "agg_inflow_trend_ratio",
+    "stress_inflow_drop_pct",
+    "agg_recent3_net_cashflow",
+    "solv_cum_burn_3m",
+    "solv_runway_from_burn",
+    "stress_burn_runway_months",
+    "stress_balance_bleed_intensity",
+    "flag_critical_liquidity_breach",
+    "stress_cushion_cliff_ratio",
+    "stress_inflow_outflow_divergence",
+    "stress_consecutive_burn_flag",
+    "stress_cushion_wipeout_m5_m1",
+]
+
 
 def get_protected_features(all_columns: List[str], cat_cols: List[str]) -> List[str]:
-    """Returns domain anchors and categorical columns that should never be dropped."""
-    protected_set = set(cat_cols + CHAMPION_14 + MACRO_SOLVENCY_10 + MACRO_TRIAGE_10)
+    """Returns domain anchors, protected stress features, and categorical columns that should never be dropped."""
+    protected_set = set(cat_cols + CHAMPION_14 + MACRO_SOLVENCY_10 + MACRO_TRIAGE_10 + PROTECTED_STRESS_FEATURES)
     return [c for c in all_columns if c in protected_set]
 
 
@@ -193,3 +211,37 @@ def run_feature_engine_selection(
         flush=True,
     )
     return X_train[selected_cols].copy(), X_test[selected_cols].copy(), selected_cols
+
+
+def select_features_with_whitelist(
+    X_train: pd.DataFrame,
+    y_train: np.ndarray,
+    X_test: pd.DataFrame,
+    cat_cols: List[str],
+    target_k: int = 140,
+    corr_threshold: float = 0.98,
+    seed: int = SEED,
+) -> Tuple[pd.DataFrame, pd.DataFrame, List[str]]:
+    """
+    1. Run standard feature_engine selection targeting target_k features.
+    2. Force inclusion of all protected stress signals available in original data.
+    """
+    X_tr_sel, X_te_sel, selected = run_feature_engine_selection(
+        X_train,
+        y_train,
+        X_test,
+        cat_cols=cat_cols,
+        k_top=target_k,
+        corr_threshold=corr_threshold,
+        seed=seed,
+    )
+
+    # Force inclusion of all protected stress signals available in original data
+    for feat in PROTECTED_STRESS_FEATURES:
+        if feat in X_train.columns and feat not in selected:
+            selected.append(feat)
+            X_tr_sel[feat] = X_train[feat]
+            X_te_sel[feat] = X_test[feat]
+
+    print(f"--- Whitelist Preserved: {len(selected)} final features (enforced anti-FN stress signals) ---", flush=True)
+    return X_tr_sel, X_te_sel, selected

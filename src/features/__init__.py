@@ -14,6 +14,7 @@ from src.features.domain import (
     add_liquidity_runway_and_exhaustion_features,
     add_solvency_and_burn_collapse_features,
     add_chris_deotte_features,
+    engineer_anti_fn_liquidity_features,
 )
 from src.features.encoding import (
     apply_fold_target_encoding,

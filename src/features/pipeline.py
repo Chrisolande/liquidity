@@ -19,6 +19,7 @@ from src.features.domain import (
     add_liquidity_runway_and_exhaustion_features,
     add_solvency_and_burn_collapse_features,
     add_chris_deotte_features,
+    engineer_anti_fn_liquidity_features,
 )
 
 
@@ -82,6 +83,9 @@ def engineer_features(
     if include_solvency:
         print("Computing multi-month solvency and burn collapse metrics", flush=True)
         combined = add_solvency_and_burn_collapse_features(combined)
+
+    print("Computing anti-FN liquidity & runway collapse features", flush=True)
+    combined = engineer_anti_fn_liquidity_features(combined)
 
     print("Computing categorical interactions and frequency encodings", flush=True)
     combined, categorical_cols = add_chris_deotte_features(combined)

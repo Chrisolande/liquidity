@@ -33,7 +33,7 @@ from src.config import (
 )
 from src.metrics import competition_score
 from src.features.pipeline import engineer_features
-from src.features.selection import run_feature_engine_selection
+from src.features.selection import run_feature_engine_selection, select_features_with_whitelist
 from src.ensemble.calibration import beta_calibrate
 
 warnings.filterwarnings("ignore", category=UserWarning)
@@ -80,12 +80,13 @@ def build_catboost(seed: int = SEED) -> CatBoostClassifier:
     return CatBoostClassifier(
         loss_function="Logloss",
         eval_metric="Logloss",
-        iterations=900,
-        learning_rate=0.045,         # Optuna tuned
-        depth=6,                     # Optuna tuned (d=6 prevents over-partitioning)
-        l2_leaf_reg=10.0,            # Optuna tuned (lighter reg restores gradient steps)
-        random_strength=1.5,         # Optuna tuned
-        bagging_temperature=0.4,     # Optuna tuned
+        iterations=800,
+        learning_rate=0.042,
+        depth=6,
+        l2_leaf_reg=10.0,
+        scale_pos_weight=1.15,
+        random_strength=1.5,
+        bagging_temperature=0.4,
         border_count=128,
         task_type=task_type,
         random_seed=seed,
@@ -115,14 +116,14 @@ def build_xgboost(seed: int = SEED) -> XGBClassifier:
 def build_lightgbm(seed: int = SEED) -> lgb.LGBMClassifier:
     return lgb.LGBMClassifier(
         n_estimators=800,
-        learning_rate=0.030,
-        num_leaves=35,               # Optuna tuned (optimal balance without leaf sparsity)
-        min_child_samples=30,        # Optuna tuned
-        colsample_bytree=0.70,       # Optuna tuned
-        subsample=0.85,              # Optuna tuned
-        subsample_freq=1,
-        reg_alpha=0.25,              # Optuna tuned
-        reg_lambda=1.0,              # Optuna tuned
+        learning_rate=0.035,
+        num_leaves=36,
+        min_child_samples=25,
+        colsample_bytree=0.70,
+        subsample=0.80,
+        reg_lambda=1.5,
+        reg_alpha=0.2,
+        scale_pos_weight=1.10,
         random_state=seed,
         seed=seed,
         bagging_seed=seed + 11,
@@ -152,7 +153,7 @@ def fit_fold_model(
             y_train,
             eval_set=(x_valid, y_valid),
             cat_features=cat_idx if cat_idx else None,
-            early_stopping_rounds=75,
+            early_stopping_rounds=40,
             verbose=False,
         )
         return model
@@ -172,7 +173,7 @@ def fit_fold_model(
             y_train,
             eval_set=[(x_valid, y_valid)],
             eval_metric="logloss",
-            callbacks=[lgb.early_stopping(75, verbose=False)],
+            callbacks=[lgb.early_stopping(40, verbose=False)],
         )
         return model
 
@@ -186,7 +187,15 @@ def predict_model_probs(
     X: pd.DataFrame,
     categorical_cols: List[str],
 ) -> np.ndarray:
-    return np.clip(model.predict_proba(X)[:, 1], FLOOR, CEIL)
+    raw_p = np.clip(model.predict_proba(X)[:, 1], 1e-7, 1.0 - 1e-7)
+    if model_name == "catboost":
+        # Crucial: Mathematically restore true base-rate probabilities
+        odds = raw_p / (1.0 - raw_p)
+        raw_p = odds / (odds + 1.15)
+    elif model_name == "lightgbm":
+        odds = raw_p / (1.0 - raw_p)
+        raw_p = odds / (odds + 1.10)
+    return np.clip(raw_p, FLOOR, CEIL)
 
 
 def cross_validate_models(
@@ -327,9 +336,9 @@ def run_baseline(
     strata = build_composite_strata(train_fe, target_col=target_col, n_splits=n_splits)
     print(f"Built multi-strata cohort keys ({strata.nunique()} unique strata) for balanced CV splitting", flush=True)
 
-    print(f"Step 2: Running feature_engine selection (targeting ~{k_top_features} features)", flush=True)
-    X_tr_sel, X_te_sel, selected_features = run_feature_engine_selection(
-        X_tr_raw, y_train, X_te_raw, cat_cols=categorical_cols, k_top=k_top_features, corr_threshold=0.98, seed=SEED
+    print(f"Step 2: Running feature_engine selection with anti-FN whitelist (targeting ~{k_top_features} features)", flush=True)
+    X_tr_sel, X_te_sel, selected_features = select_features_with_whitelist(
+        X_tr_raw, y_train, X_te_raw, cat_cols=categorical_cols, target_k=k_top_features, corr_threshold=0.98, seed=SEED
     )
 
     # Reconstruct dataframes for cross_validate_models
@@ -408,10 +417,11 @@ def run_baseline(
         raw_test += w * mean_family_test[name].to_numpy()
 
     raw_ll, raw_auc, raw_comp = competition_score(y_train, raw_oof)
-    print(
-        f"  Unified Blend Raw OOF: Comp={raw_comp:.5f} | AUC={raw_auc:.5f} | LL={raw_ll:.5f}",
-        flush=True,
-    )
+    safe_oof = np.clip(raw_oof, 0.018, 0.985)
+    safe_test = np.clip(raw_test, 0.018, 0.985)
+    safe_ll, safe_auc, safe_comp = competition_score(y_train, safe_oof)
+    print(f"  Raw Blend OOF:  Comp={raw_comp:.5f} | AUC={raw_auc:.5f} | LL={raw_ll:.5f}", flush=True)
+    print(f"  Safe Blend OOF: Comp={safe_comp:.5f} | AUC={safe_auc:.5f} | LL={safe_ll:.5f}", flush=True)
 
     # Step 5: Beta calibration with protective fallback gating
     print("Step 5: Cross-fitted Beta calibration", flush=True)
@@ -419,19 +429,15 @@ def run_baseline(
     cal_ll, cal_auc, cal_comp = competition_score(y_train, calibrated_oof)
     print(f"  Beta Calibrated: Comp={cal_comp:.5f} | AUC={cal_auc:.5f} | LL={cal_ll:.5f}", flush=True)
 
-    # Protect against calibration degradation
-    if cal_comp >= raw_comp:
-        final_oof = calibrated_oof
-        final_test = calibrated_test
-        selected_strategy_name = "multiseed_slsqp_family_blend_beta_calibrated"
-        best_comp, best_auc, best_ll = cal_comp, cal_auc, cal_ll
-        print("  --> Adopted Beta Calibration.", flush=True)
-    else:
-        final_oof = raw_oof
-        final_test = raw_test
-        selected_strategy_name = "multiseed_slsqp_family_blend_raw"
-        best_comp, best_auc, best_ll = raw_comp, raw_auc, raw_ll
-        print("  --> Preserved Raw Blend (Calibration did not improve composite).", flush=True)
+    # Pick champion strategy among raw, safe clip, and calibrated
+    candidates = [
+        ("multiseed_slsqp_family_blend_raw", raw_comp, raw_auc, raw_ll, raw_oof, raw_test),
+        ("multiseed_slsqp_family_blend_safe_clip", safe_comp, safe_auc, safe_ll, safe_oof, safe_test),
+        ("multiseed_slsqp_family_blend_beta_calibrated", cal_comp, cal_auc, cal_ll, calibrated_oof, calibrated_test),
+    ]
+    candidates.sort(key=lambda x: x[1], reverse=True)
+    selected_strategy_name, best_comp, best_auc, best_ll, final_oof, final_test = candidates[0]
+    print(f"  --> Champion Strategy: {selected_strategy_name} (Comp={best_comp:.5f})", flush=True)
 
     # Export canonical baseline tournament anchor artifacts
     np.save(os.path.join(output_dir, "oof_champ_train.npy"), final_oof)
