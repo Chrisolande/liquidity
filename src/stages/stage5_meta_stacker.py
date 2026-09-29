@@ -23,6 +23,7 @@ from src.config import (
     TARGET,
     FLOOR,
     CEIL,
+    ENABLE_STAGE3,
     get_default_dataset_paths,
 )
 from src.ensemble.calibration import platt_scaling_calibrate
@@ -33,9 +34,11 @@ def run_stage5(
     ckpt_dir: str = "checkpoints",
     sub_dir: str = "submissions",
     test_path: str = None,
-    use_tabpfn: bool = False,
+    use_tabpfn: bool = None,
 ) -> float:
     """Executes upgraded Stage 5 Logit-Space L2 Meta-Stacker, Hill Climbing, and final verification."""
+    if use_tabpfn is None:
+        use_tabpfn = ENABLE_STAGE3
     print("=" * 80)
     print("STAGE 5: UPGRADED 10-FOLD LOGIT-SPACE L2 META-STACKER & HILL CLIMBER")
     print("=" * 80, flush=True)

@@ -33,6 +33,7 @@ from src.config import (
     TARGET,
     ID_COL,
     HAS_GPU,
+    ENABLE_STAGE3,
     get_default_dataset_paths,
 )
 from src.features.pipeline import engineer_features
@@ -50,9 +51,11 @@ def run_stage4(
     output_dir: str = "checkpoints",
     sub_dir: str = "submissions",
     n_splits: int = 10,
-    use_tabpfn: bool = False,
+    use_tabpfn: bool = None,
 ) -> float:
     """Executes Stage 4 Diversity Pipeline."""
+    if use_tabpfn is None:
+        use_tabpfn = ENABLE_STAGE3
     print("Stage 4: Diversity Base Learners Pipeline (10-Fold CV)", flush=True)
 
     os.makedirs(output_dir, exist_ok=True)

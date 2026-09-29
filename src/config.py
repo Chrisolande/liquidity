@@ -12,7 +12,7 @@ import torch
 # Competition Invariants
 SEED: int = 42
 SEEDS: Tuple[int, ...] = (42, 2026)
-SINGLE_SEED_MODE: bool = os.environ.get("LSEW_SINGLE_SEED", "1") == "1"
+SINGLE_SEED_MODE: bool = os.environ.get("LSEW_SINGLE_SEED", "0") == "1"
 ACTIVE_SEEDS: Tuple[int, ...] = (SEED,) if SINGLE_SEED_MODE else SEEDS
 N_SPLITS: int = 10
 EPS: float = 1e-6
@@ -22,7 +22,7 @@ FLOOR: float = 0.0020
 CEIL: float = 0.9995
 
 
-def set_seed_mode(single_seed: bool = True) -> Tuple[int, ...]:
+def set_seed_mode(single_seed: bool = False) -> Tuple[int, ...]:
     """Toggle between single seed (42,) and multi-seed (42, 2026) globally."""
     global ACTIVE_SEEDS, SINGLE_SEED_MODE
     SINGLE_SEED_MODE = single_seed
@@ -30,11 +30,11 @@ def set_seed_mode(single_seed: bool = True) -> Tuple[int, ...]:
     return ACTIVE_SEEDS
 
 
-# Stage 3 (TabPFN) Execution Toggle (defaults to False to avoid 2h training during fast iteration)
-ENABLE_STAGE3: bool = os.environ.get("LSEW_ENABLE_STAGE3", "0") == "1"
+# Stage 3 (TabPFN) Execution Toggle (defaults to True for full competitive submission)
+ENABLE_STAGE3: bool = os.environ.get("LSEW_ENABLE_STAGE3", "1") == "1"
 
 
-def set_stage3_mode(enable: bool = False) -> bool:
+def set_stage3_mode(enable: bool = True) -> bool:
     """Toggle Stage 3 (TabPFN Foundation Priors) on or off globally."""
     global ENABLE_STAGE3
     ENABLE_STAGE3 = enable
