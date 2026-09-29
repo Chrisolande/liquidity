@@ -170,6 +170,7 @@ def run_stage2(
     train_path: str = None,
     test_path: str = None,
     output_dir: str = "checkpoints",
+    sub_dir: str = "submissions",
     seeds: Sequence[int] = (42, 2026),
     n_splits: int = 10,
     k_top_features: int = 60,
