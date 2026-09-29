@@ -236,7 +236,16 @@ def run_multistrata_pipeline(
     target_col = TARGET if TARGET in train_raw.columns else "Target"
 
     Y_multi = build_multilabel_stratification_matrix(train_raw)
-    mskf = MultilabelStratifiedKFold(n_splits=N_SPLITS, shuffle=True, random_state=SEED)
+    try:
+        from iterstrat.ml_stratifiers import MultilabelStratifiedKFold
+        mskf = MultilabelStratifiedKFold(n_splits=N_SPLITS, shuffle=True, random_state=SEED)
+        split_gen = list(mskf.split(train_raw, Y_multi))
+        print("Using MultilabelStratifiedKFold for cohort stratification.", flush=True)
+    except Exception as e:
+        from sklearn.model_selection import StratifiedKFold
+        print(f"[MultiStrata] Notice: Using StratifiedKFold fallback ({e})", flush=True)
+        skf = StratifiedKFold(n_splits=N_SPLITS, shuffle=True, random_state=SEED)
+        split_gen = list(skf.split(train_raw, train_raw[target_col].to_numpy(dtype=int)))
 
     train_fe, test_fe, categorical_cols, numeric_cols = engineer_features(train_raw, test_raw)
     feature_cols = [c for c in train_fe.columns if c not in {target_col, ID_COL}]
@@ -260,7 +269,7 @@ def run_multistrata_pipeline(
     te_targets = [c for c in ["segment", "region", "gender", "seg_earn", "reg_seg", "gen_earn"] if c in X.columns]
 
     fold_splits = []
-    for fold, (trn_idx, val_idx) in enumerate(mskf.split(X, Y_multi), start=1):
+    for fold, (trn_idx, val_idx) in enumerate(split_gen, start=1):
         x_tr, y_tr = X.iloc[trn_idx].copy(), y[trn_idx]
         x_va, y_va = X.iloc[val_idx].copy(), y[val_idx]
         x_te = X_test.copy()
