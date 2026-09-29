@@ -43,8 +43,7 @@ from src.config import (
     get_default_dataset_paths,
 )
 from src.features.pipeline import engineer_features
-from src.features.selection import run_feature_engine_selection
-from src.features.encoding import extract_domain_feature_subsets
+from src.features.encoding import screen_features, extract_domain_feature_subsets
 from src.ensemble.calibration import beta_calibrate
 from src.metrics import competition_score
 
@@ -215,53 +214,56 @@ def run_stage2(
     X_train_clean = X_train_feat.drop(columns=drop_meta)
     X_test_clean = X_test_feat.drop(columns=[c for c in [ID_COL] if c in X_test_feat.columns])
 
-    X_tr_sel, X_te_sel, selected_cols = run_feature_engine_selection(
-        X_train_clean, y_true, X_test_clean, cat_cols=cat_cols, k_top=k_top_features, corr_threshold=0.98, seed=SEED
-    )
-    active_cats = [c for c in cat_cols if c in selected_cols]
-    print(f"Active features for Domain Zoo: {len(selected_cols)} ({len(active_cats)} categoricals)", flush=True)
-
-    # 3. Extract Specialized Domain Views
-    dom2_cols, dom3_cols, dom_triage_cols = extract_domain_feature_subsets(list(selected_cols))
-    print(f"Domain Views Configured:")
-    print(f"  dom2_cols (Physics + Digital Channels)  : {len(dom2_cols)} features", flush=True)
-    print(f"  dom3_cols (Physics + Digital + Momentum): {len(dom3_cols)} features", flush=True)
-    print(f"  dom_triage_cols (Physics + Triage)      : {len(dom_triage_cols)} features", flush=True)
-
-    # 4. Define the 5 Zoo Architectures
-    architectures = [
-        ("cb_d7_dom26", CatBoostClassifier, {"depth": 7, "learning_rate": 0.038, "l2_leaf_reg": 20.0, "iterations": 650}, dom2_cols),
-        ("cb_d6_dom35", CatBoostClassifier, {"depth": 6, "learning_rate": 0.038, "l2_leaf_reg": 10.0, "iterations": 650}, dom3_cols),
-        ("xgb_d4_dom35", XGBClassifier, {"max_depth": 4, "learning_rate": 0.035, "min_child_weight": 5.0, "subsample": 0.85, "colsample_bytree": 0.75, "reg_lambda": 2.0, "gamma": 1.5, "n_estimators": 600}, dom3_cols),
-        ("xgb_d4_triage", XGBClassifier, {"max_depth": 4, "learning_rate": 0.035, "min_child_weight": 5.0, "subsample": 0.85, "colsample_bytree": 0.75, "reg_lambda": 2.0, "gamma": 1.5, "n_estimators": 600}, dom_triage_cols),
-        ("lgb_extra", lgb.LGBMClassifier, {"num_leaves": 45, "learning_rate": 0.030, "min_child_samples": 60, "colsample_bytree": 0.60, "subsample": 0.75, "subsample_freq": 1, "reg_lambda": 5.0, "n_estimators": 600, "extra_trees": True}, list(selected_cols)),
+    # 3. Define the 5 Zoo Architectures with column subset functions
+    architectures_def = [
+        ("cb_d7_dom26", CatBoostClassifier, {"depth": 7, "learning_rate": 0.038, "l2_leaf_reg": 20.0, "iterations": 650}, lambda d2, d3, dt, sel: d2),
+        ("cb_d6_dom35", CatBoostClassifier, {"depth": 6, "learning_rate": 0.038, "l2_leaf_reg": 10.0, "iterations": 650}, lambda d2, d3, dt, sel: d3),
+        ("xgb_d4_dom35", XGBClassifier, {"max_depth": 4, "learning_rate": 0.035, "min_child_weight": 5.0, "subsample": 0.85, "colsample_bytree": 0.75, "reg_lambda": 2.0, "gamma": 1.5, "n_estimators": 600}, lambda d2, d3, dt, sel: d3),
+        ("xgb_d4_triage", XGBClassifier, {"max_depth": 4, "learning_rate": 0.035, "min_child_weight": 5.0, "subsample": 0.85, "colsample_bytree": 0.75, "reg_lambda": 2.0, "gamma": 1.5, "n_estimators": 600}, lambda d2, d3, dt, sel: dt),
+        ("lgb_extra", lgb.LGBMClassifier, {"num_leaves": 45, "learning_rate": 0.030, "min_child_samples": 60, "colsample_bytree": 0.60, "subsample": 0.75, "subsample_freq": 1, "reg_lambda": 5.0, "n_estimators": 600, "extra_trees": True}, lambda d2, d3, dt, sel: list(sel)),
     ]
 
-    zoo_oof: Dict[str, np.ndarray] = {}
-    zoo_test: Dict[str, np.ndarray] = {}
+    zoo_oof: Dict[str, np.ndarray] = {name: np.zeros(len(train_raw)) for name, _, _, _ in architectures_def}
+    zoo_test: Dict[str, np.ndarray] = {name: np.zeros(len(test_raw)) for name, _, _, _ in architectures_def}
 
-    # 5. Cross-Validation Loop across Seeds & Folds
-    for arch_idx, (name, cls_, params, cols) in enumerate(architectures, start=1):
-        print(f"\n[{arch_idx}/{len(architectures)}] Training Domain Architecture: {name} (cols={len(cols)})", flush=True)
-        t_arch = time.time()
-        m_oof_seeds = np.zeros(len(train_raw))
-        m_test_seeds = np.zeros(len(test_raw))
+    # 4. Cross-Validation Loop: Folds Outer -> Models Inner (Leak-Free Nested Selection)
+    for s_idx, seed_val in enumerate(seeds, start=1):
+        print(f"\n--- Cross-Validation Seed {seed_val} ({s_idx}/{len(seeds)}) ---", flush=True)
+        skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=seed_val)
 
-        for s_idx, seed_val in enumerate(seeds, start=1):
-            skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=seed_val)
-            fold_test_preds = []
+        for fold, (trn_idx, val_idx) in enumerate(skf.split(X_train_clean, y_true), start=1):
+            t_fold = time.time()
+            x_tr_raw = X_train_clean.iloc[trn_idx].copy()
+            y_tr = y_true[trn_idx]
+            x_va_raw = X_train_clean.iloc[val_idx].copy()
+            y_va = y_true[val_idx]
+            x_te_raw = X_test_clean.copy()
 
-            for fold, (trn_idx, val_idx) in enumerate(skf.split(X_tr_sel, y_true), start=1):
-                x_tr, y_tr = X_tr_sel.iloc[trn_idx].copy(), y_true[trn_idx]
-                x_va, y_va = X_tr_sel.iloc[val_idx].copy(), y_true[val_idx]
-                x_te = X_te_sel.copy()
+            # Fold-isolated feature screening strictly on training partition
+            selected_cols = screen_features(
+                x_tr_raw, y_tr, cat_cols=cat_cols, k_top=k_top_features, seed=seed_val
+            )
+            active_cats = [c for c in cat_cols if c in selected_cols]
+            dom2_cols, dom3_cols, dom_triage_cols = extract_domain_feature_subsets(selected_cols)
+
+            # Filter fold slices
+            x_tr = x_tr_raw[selected_cols].copy()
+            x_va = x_va_raw[selected_cols].copy()
+            x_te = x_te_raw[[c for c in selected_cols if c in x_te_raw.columns]].copy()
+
+            print(f"  [Fold {fold}/{n_splits}] Screened {len(selected_cols)} cols ({len(active_cats)} cats)", flush=True)
+
+            # Train all 5 architectures on this fold's prepared data
+            for name, cls_, params, col_fn in architectures_def:
+                arch_cols = col_fn(dom2_cols, dom3_cols, dom_triage_cols, selected_cols)
+                arch_cats = [c for c in active_cats if c in arch_cols]
 
                 val_p, test_p = train_single_model_fold(
                     model_name=name,
                     cls_=cls_,
                     params=params,
-                    cols=cols,
-                    cat_cols=active_cats,
+                    cols=arch_cols,
+                    cat_cols=arch_cats,
                     x_tr=x_tr,
                     y_tr=y_tr,
                     x_va=x_va,
@@ -269,16 +271,14 @@ def run_stage2(
                     x_te=x_te,
                     seed=seed_val + fold,
                 )
-                m_oof_seeds[val_idx] += val_p / len(seeds)
-                fold_test_preds.append(test_p)
+                zoo_oof[name][val_idx] += val_p / len(seeds)
+                zoo_test[name] += test_p / (n_splits * len(seeds))
 
-            m_test_seeds += np.mean(fold_test_preds, axis=0) / len(seeds)
+            print(f"  --> Fold {fold} finished in {time.time() - t_fold:.1f}s", flush=True)
 
-        zoo_oof[name] = m_oof_seeds
-        zoo_test[name] = m_test_seeds
-
-        ll, auc, comp = competition_score(y_true, m_oof_seeds)
-        print(f"  ==> {name} 1-Seed OOF: Comp={comp:.5f} | AUC={auc:.5f} | LL={ll:.5f} ({time.time() - t_arch:.1f}s)", flush=True)
+    for name, _, _, _ in architectures_def:
+        ll, auc, comp = competition_score(y_true, zoo_oof[name])
+        print(f"  ==> {name} OOF: Comp={comp:.5f} | AUC={auc:.5f} | LL={ll:.5f}", flush=True)
 
     # 6. Ensemble Optimization (incorporating anchor)
     print("\n" + "=" * 80, flush=True)
@@ -340,7 +340,7 @@ def run_stage2(
 
     s2_path1 = os.path.join(output_dir, "gbdt_zoo_4seed.npz")
     s2_path2 = os.path.join(output_dir, "gbdt_balanced_dom1_p2_seeds4.npz")
-    np.savez_compressed(s2_path1, oof_s4_tree_zoo=final_oof, test_s4_tree_zoo=final_test, **save_payload)
+    np.savez_compressed(s2_path1, oof_s4_tree_zoo=raw_oof, test_s4_tree_zoo=raw_test, oof_calibrated=final_oof, test_calibrated=final_test, **save_payload)
     np.savez_compressed(s2_path2, **save_payload)
 
     # Update champion anchor if improved

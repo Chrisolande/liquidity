@@ -31,11 +31,11 @@
 **Goal**: Invert Stage 2 fold loop to execute `screen_features()` strictly on outer-training splits ($X_{tr}, y_{tr}$) with explicit per-fold metadata resolution (`active_cats` and domain views).  
 **Independent Test**: Assert that permuting validation labels produces zero difference in `selected_cols`, and a 2-fold smoke test completes without `KeyError`.
 
-- [ ] T005 [P] [US1] Create target leakage invariance test in tests/test_leakage_invariance.py
-- [ ] T006 [P] [US2] Create Stage 2 multi-architecture smoke test in tests/test_stage2_smoke.py
-- [ ] T007 [US1] Remove global run_feature_engine_selection() and invert loop to Folds (outer) -> Models (inner) in src/stages/stage2_gbdt_zoo.py
-- [ ] T008 [US2] Implement explicit per-fold active_cats and domain column views resolution in src/stages/stage2_gbdt_zoo.py
-- [ ] T009 [US1] Export raw uncalibrated prediction arrays in checkpoints/gbdt_zoo_4seed.npz from src/stages/stage2_gbdt_zoo.py
+- [X] T005 [P] [US1] Create target leakage invariance test in tests/test_leakage_invariance.py
+- [X] T006 [P] [US2] Create Stage 2 multi-architecture smoke test in tests/test_stage2_smoke.py
+- [X] T007 [US1] Remove global run_feature_engine_selection() and invert loop to Folds (outer) -> Models (inner) in src/stages/stage2_gbdt_zoo.py
+- [X] T008 [US2] Implement explicit per-fold active_cats and domain column views resolution in src/stages/stage2_gbdt_zoo.py
+- [X] T009 [US1] Export raw uncalibrated prediction arrays in checkpoints/gbdt_zoo_4seed.npz from src/stages/stage2_gbdt_zoo.py
 
 ---
 

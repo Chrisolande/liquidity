@@ -108,6 +108,15 @@ def extract_domain_feature_subsets(
     dom2 = d1_physics + d2_digital
     dom3 = d1_physics + d2_digital + d3_momentum
     dom_triage = d1_physics + d5_triage
+
+    # Defensive fallback: if domain filtering yields empty list, default to all available columns
+    if not dom2:
+        dom2 = list(all_cols)
+    if not dom3:
+        dom3 = list(all_cols)
+    if not dom_triage:
+        dom_triage = list(all_cols)
+
     return dom2, dom3, dom_triage
 
 
