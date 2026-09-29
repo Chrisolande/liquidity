@@ -172,8 +172,8 @@ def run_stage2(
     test_path: str = None,
     output_dir: str = "checkpoints",
     sub_dir: str = "submissions",
-    seeds: Sequence[int] = (42, 100, 2024, 777),
-    n_splits: int = 5,
+    seeds: Sequence[int] = (42,),
+    n_splits: int = 10,
     k_top_features: int = 60,
 ) -> float:
     os.makedirs(output_dir, exist_ok=True)
@@ -188,7 +188,7 @@ def run_stage2(
     y_true = train_raw[target_col].to_numpy(int)
 
     print("=" * 80, flush=True)
-    print("STAGE 2: 4-SEED 5-FOLD DOMAIN GBDT ZOO (5 ARCHITECTURES)", flush=True)
+    print("STAGE 2: 1-SEED 10-FOLD DOMAIN GBDT ZOO (5 ARCHITECTURES)", flush=True)
     print("=" * 80, flush=True)
 
     # 1. Load Anchor from Stage 1 / Baseline
@@ -278,7 +278,7 @@ def run_stage2(
         zoo_test[name] = m_test_seeds
 
         ll, auc, comp = competition_score(y_true, m_oof_seeds)
-        print(f"  ==> {name} 4-Seed OOF: Comp={comp:.5f} | AUC={auc:.5f} | LL={ll:.5f} ({time.time() - t_arch:.1f}s)", flush=True)
+        print(f"  ==> {name} 1-Seed OOF: Comp={comp:.5f} | AUC={auc:.5f} | LL={ll:.5f} ({time.time() - t_arch:.1f}s)", flush=True)
 
     # 6. Ensemble Optimization (incorporating anchor)
     print("\n" + "=" * 80, flush=True)

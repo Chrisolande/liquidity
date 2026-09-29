@@ -249,7 +249,7 @@ def run_baseline(
     models_dir: str = "models",
     k_top_features: int = 60,
     n_splits: int = 10,
-    seeds: Tuple[int, ...] = (42, 100, 2024, 2026),
+    seeds: Tuple[int, ...] = (42,),
 ) -> Tuple[float, np.ndarray, np.ndarray]:
     """
     Executes the upgraded baseline pipeline with family-level multi-seed averaging:

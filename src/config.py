@@ -11,7 +11,7 @@ import torch
 
 # Competition Invariants
 SEED: int = 42
-N_SPLITS: int = 5
+N_SPLITS: int = 10
 EPS: float = 1e-6
 TARGET: str = "liquidity_stress_next_30d"
 ID_COL: str = "ID"
