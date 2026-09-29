@@ -148,6 +148,22 @@ def run_stage5(
                 oof_dict[k] = zoo[f"oof_{k}"]
                 test_dict[k] = zoo[f"test_{k}"]
 
+    # Dedicated Independent Stage 2 Domain Ensemble
+    s2_domain_oof_candidates = [
+        os.path.join(ckpt_dir, "oof_stage2_domain.npy"),
+        os.path.join("pulled", "oof_stage2_domain.npy"),
+    ]
+    s2_domain_test_candidates = [
+        os.path.join(ckpt_dir, "test_stage2_domain.npy"),
+        os.path.join("pulled", "test_stage2_domain.npy"),
+    ]
+    s2_oof_p = next((p for p in s2_domain_oof_candidates if os.path.exists(p)), None)
+    s2_test_p = next((p for p in s2_domain_test_candidates if os.path.exists(p)), None)
+    if s2_oof_p and s2_test_p:
+        oof_dict["s2_domain_ensemble"] = np.load(s2_oof_p)
+        test_dict["s2_domain_ensemble"] = np.load(s2_test_p)
+        print(f"Loaded Independent Stage 2 Domain Ensemble: {s2_oof_p}")
+
     # 4. MultiStrata Iterative Stratification Stream
     ms_candidates = [
         os.path.join(ckpt_dir, "multistrata.npz"),
@@ -329,7 +345,7 @@ def run_stage5(
     )
 
     final_ll, final_auc, final_comp = competition_score(y_true, final_oof)
-    print(f"Stage 5 Final Meta-Stacker: Comp={final_comp:.5f} | AUC={final_auc:.5f} | LL={final_ll:.5f} (Floor={best_floor:.4f})", flush=True)
+    print(f"Stage 5 Final Meta-Stacker: Comp={final_comp:.5f} | AUC={final_auc:.5f} | LL={final_ll:.5f} | Floor={FLOOR:.4f} | Alpha={best_alpha:.6f}", flush=True)
 
     out_csv = os.path.join(sub_dir, "submission_stage5_final.csv")
     sub_df = pd.DataFrame({ID_COL: test_ids, "Target": final_test})

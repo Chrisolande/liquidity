@@ -170,10 +170,10 @@ def run_stage2(
     train_path: str = None,
     test_path: str = None,
     output_dir: str = "checkpoints",
-    sub_dir: str = "submissions",
     seeds: Sequence[int] = (42, 2026),
     n_splits: int = 10,
     k_top_features: int = 60,
+    include_anchor: bool = False,
 ) -> float:
     os.makedirs(output_dir, exist_ok=True)
     os.makedirs(sub_dir, exist_ok=True)
@@ -186,23 +186,29 @@ def run_stage2(
     target_col = TARGET if TARGET in train_raw.columns else "Target"
     y_true = train_raw[target_col].to_numpy(int)
 
-    print("Stage 2: 10-fold domain GBDT zoo (5 architectures)", flush=True)
+    print(f"Stage 2: 10-fold domain GBDT zoo (5 architectures, independent_domain_learning={not include_anchor})", flush=True)
 
-    # 1. Load Anchor from Stage 1 / Baseline
-    anchor_oof_path = os.path.join(output_dir, "oof_champ_train.npy")
-    anchor_sub_path = os.path.join(sub_dir, "submission_stage1_hillclimb.csv")
-    if not os.path.exists(anchor_sub_path):
-        anchor_sub_path = os.path.join(sub_dir, "submission_baseline.csv")
+    # 1. Load Anchor from Stage 1 / Baseline (only if include_anchor is True)
+    oof_anchor = None
+    test_anchor = None
+    a_comp = 0.0
 
-    oof_anchor = np.load(anchor_oof_path) if os.path.exists(anchor_oof_path) else None
-    test_anchor = pd.read_csv(anchor_sub_path)["Target"].to_numpy(dtype=float) if os.path.exists(anchor_sub_path) else None
+    if include_anchor:
+        anchor_oof_path = os.path.join(output_dir, "oof_champ_train.npy")
+        anchor_sub_path = os.path.join(sub_dir, "submission_stage1_hillclimb.csv")
+        if not os.path.exists(anchor_sub_path):
+            anchor_sub_path = os.path.join(sub_dir, "submission_baseline.csv")
 
-    if oof_anchor is not None:
-        a_ll, a_auc, a_comp = competition_score(y_true, oof_anchor)
-        print(f"Loaded stage champion anchor: Comp={a_comp:.5f} | AUC={a_auc:.5f} | LL={a_ll:.5f}", flush=True)
+        oof_anchor = np.load(anchor_oof_path) if os.path.exists(anchor_oof_path) else None
+        test_anchor = pd.read_csv(anchor_sub_path)["Target"].to_numpy(dtype=float) if os.path.exists(anchor_sub_path) else None
+
+        if oof_anchor is not None:
+            a_ll, a_auc, a_comp = competition_score(y_true, oof_anchor)
+            print(f"Loaded stage champion anchor: Comp={a_comp:.5f} | AUC={a_auc:.5f} | LL={a_ll:.5f}", flush=True)
+        else:
+            print("oof_champ_train.npy not found. Stage 2 will proceed from scratch.", flush=True)
     else:
-        print("oof_champ_train.npy not found. Stage 2 will proceed from scratch.", flush=True)
-        a_comp = 0.0
+        print("Independent Domain Learning: Stage 2 operating without Stage 1 anchor.", flush=True)
 
     # 2. Modern Feature Engineering & Selection
     print("\nStep 1: Engineering comprehensive features & filtering via feature_engine", flush=True)
@@ -306,18 +312,28 @@ def run_stage2(
     c_ll, c_auc, c_comp = competition_score(y_true, cal_oof)
     print(f"Beta calibrated zoo OOF: Comp={c_comp:.5f} | AUC={c_auc:.5f} | LL={c_ll:.5f}", flush=True)
 
-    if c_comp >= r_comp and c_comp >= a_comp:
-        final_oof, final_test = cal_oof, cal_test
-        selected_name = "beta_calibrated_zoo"
-        print(f"Adopted calibrated zoo (+{c_comp - a_comp:+.5f} vs anchor).", flush=True)
-    elif r_comp >= a_comp:
-        final_oof, final_test = raw_oof, raw_test
-        selected_name = "raw_zoo_blend"
-        print(f"Adopted raw zoo (+{r_comp - a_comp:+.5f} vs anchor).", flush=True)
+    if include_anchor:
+        if c_comp >= r_comp and c_comp >= a_comp:
+            final_oof, final_test = cal_oof, cal_test
+            selected_name = "beta_calibrated_zoo"
+            print(f"Adopted calibrated zoo (+{c_comp - a_comp:+.5f} vs anchor).", flush=True)
+        elif r_comp >= a_comp:
+            final_oof, final_test = raw_oof, raw_test
+            selected_name = "raw_zoo_blend"
+            print(f"Adopted raw zoo (+{r_comp - a_comp:+.5f} vs anchor).", flush=True)
+        else:
+            final_oof, final_test = oof_anchor, test_anchor
+            selected_name = "preserved_anchor"
+            print("Preserved previous anchor.", flush=True)
     else:
-        final_oof, final_test = oof_anchor, test_anchor
-        selected_name = "preserved_anchor"
-        print("Preserved previous anchor.", flush=True)
+        if c_comp >= r_comp:
+            final_oof, final_test = cal_oof, cal_test
+            selected_name = "beta_calibrated_zoo"
+            print(f"Adopted calibrated domain zoo: Comp={c_comp:.5f}", flush=True)
+        else:
+            final_oof, final_test = raw_oof, raw_test
+            selected_name = "raw_zoo_blend"
+            print(f"Adopted raw domain zoo: Comp={r_comp:.5f}", flush=True)
 
     f_ll, f_auc, final_comp = competition_score(y_true, final_oof)
     print(f"Final Stage 2 score: Comp={final_comp:.5f} | AUC={f_auc:.5f} | LL={f_ll:.5f}", flush=True)
@@ -333,8 +349,12 @@ def run_stage2(
     np.savez_compressed(s2_path1, oof_s4_tree_zoo=raw_oof, test_s4_tree_zoo=raw_test, oof_calibrated=final_oof, test_calibrated=final_test, **save_payload)
     np.savez_compressed(s2_path2, **save_payload)
 
-    # Update champion anchor if improved
-    if final_comp >= a_comp:
+    # Save dedicated Stage 2 independent domain predictions
+    np.save(os.path.join(output_dir, "oof_stage2_domain.npy"), raw_oof)
+    np.save(os.path.join(output_dir, "test_stage2_domain.npy"), raw_test)
+
+    # Update champion anchor if improved AND running in tournament anchor mode
+    if include_anchor and final_comp >= a_comp:
         np.save(os.path.join(output_dir, "oof_champ_train.npy"), final_oof)
 
     sub_path = os.path.join(sub_dir, "submission_s2_gbdt_zoo.csv")

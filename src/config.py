@@ -12,12 +12,23 @@ import torch
 # Competition Invariants
 SEED: int = 42
 SEEDS: Tuple[int, ...] = (42, 2026)
+SINGLE_SEED_MODE: bool = os.environ.get("LSEW_SINGLE_SEED", "1") == "1"
+ACTIVE_SEEDS: Tuple[int, ...] = (SEED,) if SINGLE_SEED_MODE else SEEDS
 N_SPLITS: int = 10
 EPS: float = 1e-6
 TARGET: str = "liquidity_stress_next_30d"
 ID_COL: str = "ID"
 FLOOR: float = 0.0020
 CEIL: float = 0.9995
+
+
+def set_seed_mode(single_seed: bool = True) -> Tuple[int, ...]:
+    """Toggle between single seed (42,) and multi-seed (42, 2026) globally."""
+    global ACTIVE_SEEDS, SINGLE_SEED_MODE
+    SINGLE_SEED_MODE = single_seed
+    ACTIVE_SEEDS = (SEED,) if single_seed else (42, 2026)
+    return ACTIVE_SEEDS
+
 
 # Budget Presets
 BUDGET: str = os.environ.get("LSEW_BUDGET", "fast").lower()
