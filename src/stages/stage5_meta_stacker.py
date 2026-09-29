@@ -25,7 +25,7 @@ from src.config import (
     CEIL,
     get_default_dataset_paths,
 )
-from src.ensemble.stacking import hill_climb_blend
+from src.ensemble.calibration import platt_scaling_calibrate
 from src.metrics import competition_score, print_correlation_matrix
 
 
@@ -318,40 +318,15 @@ def run_stage5(
 
     print(f"\nOptimal Alpha={best_alpha:.6f} with Logit Stacker OOF Score = {best_comp:.5f}")
 
-    # Forward Selection Hill-Climbing check
-    print("\n--- Forward Selection Hill-Climbing Enhancement ---", flush=True)
-    hc_candidates = dict(valid_streams)
-    hc_candidates["logit_stack"] = best_oof
-    hc_test_c = dict(valid_test)
-    hc_test_c["logit_stack"] = best_test
-    hc_res = hill_climb_blend(pd.DataFrame(hc_candidates), pd.DataFrame(hc_test_c), y_true)
-    if hc_res is not None and hc_res[2] > best_comp:
-        print(f"Hill-Climbing improvement: {hc_res[2]:.5f} > {best_comp:.5f}", flush=True)
-        best_oof = hc_res[0]
-        best_test = hc_res[1]
-        best_comp = hc_res[2]
-
-    # Asymmetric Tail Smoothing Sweep [0.0020 to 0.0040]
-    print("\n--- Tail Smoothing Floor Sweep ---", flush=True)
-    best_floor = 0.0020
-    best_tail_comp = best_comp
-    for fl in [0.0020, 0.0025, 0.0030, 0.0035, 0.0040]:
-        c_oof = np.clip(best_oof, fl, 0.9980)
-        fl_ll, fl_auc, fl_comp = competition_score(y_true, c_oof)
-        print(f"  Floor {fl:.4f} -> LL={fl_ll:.5f} | AUC={fl_auc:.5f} | Comp={fl_comp:.5f}", flush=True)
-        if fl_comp > best_tail_comp:
-            best_tail_comp = fl_comp
-            best_floor = fl
-
-    final_oof = np.clip(best_oof, best_floor, 0.9980)
-
-    # Natural Prevalence Alignment
-    # Scale test predictions so mean strictly matches natural prevalence (0.15340)
-    cur_mean = best_test.mean()
-    target_prev = 0.15340
-    adj_factor = target_prev / cur_mean
-    final_test = np.clip(best_test * adj_factor, best_floor, 0.9980)
-    print(f"\nFinal Test Prevalence Alignment: {cur_mean:.5f} -> {final_test.mean():.5f} (Target: {target_prev})", flush=True)
+    # Final Single-Stage Cross-Fitted Calibration
+    print("\n--- Final Single-Stage Cross-Fitted Calibration ---", flush=True)
+    final_oof, final_test, _ = platt_scaling_calibrate(
+        oof_prob=best_oof,
+        test_prob=best_test,
+        y_true=y_true,
+        n_splits=10,
+        seed=42,
+    )
 
     final_ll, final_auc, final_comp = competition_score(y_true, final_oof)
     print("\n" + "=" * 80)

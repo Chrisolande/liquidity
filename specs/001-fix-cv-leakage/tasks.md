@@ -56,9 +56,9 @@
 **Goal**: Remove greedy OOF hill-climbing, purge multiplicative test prevalence hacking (`0.15340`), and apply single-stage cross-fitted Platt calibration.  
 **Independent Test**: Verify that test predictions preserve calibrated odds without multiplicative prevalence factor.
 
-- [ ] T012 [P] [US4] Create Stage 5 stacker and prevalence test in tests/test_stage5_stacker.py
-- [ ] T013 [US4] Remove greedy hill_climb_blend() and delete multiplicative prevalence scaling in src/stages/stage5_meta_stacker.py
-- [ ] T014 [US5] Apply single-stage cross-fitted platt_scaling_calibrate() at the output of Stage 5 in src/stages/stage5_meta_stacker.py
+- [X] T012 [P] [US4] Create Stage 5 stacker and prevalence test in tests/test_stage5_stacker.py
+- [X] T013 [US4] Remove greedy hill_climb_blend() and delete multiplicative prevalence scaling in src/stages/stage5_meta_stacker.py
+- [X] T014 [US5] Apply single-stage cross-fitted platt_scaling_calibrate() at the output of Stage 5 in src/stages/stage5_meta_stacker.py
 
 ---
 
