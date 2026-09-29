@@ -171,7 +171,7 @@ def run_stage2(
     test_path: str = None,
     output_dir: str = "checkpoints",
     sub_dir: str = "submissions",
-    seeds: Sequence[int] = (42,),
+    seeds: Sequence[int] = (42, 2026),
     n_splits: int = 10,
     k_top_features: int = 60,
 ) -> float:
@@ -187,7 +187,7 @@ def run_stage2(
     y_true = train_raw[target_col].to_numpy(int)
 
     print("=" * 80, flush=True)
-    print("STAGE 2: 1-SEED 10-FOLD DOMAIN GBDT ZOO (5 ARCHITECTURES)", flush=True)
+    print("STAGE 2: 2-SEED 10-FOLD DOMAIN GBDT ZOO (5 ARCHITECTURES)", flush=True)
     print("=" * 80, flush=True)
 
     # 1. Load Anchor from Stage 1 / Baseline

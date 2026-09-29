@@ -15,7 +15,7 @@ except ImportError:
 
 PROXY_URL = os.environ.get(
     "KAGGLE_PROXY_URL",
-    "https://kkb-production.jupyter-proxy.kaggle.net/k/353880983/eyJhbGciOiJkaXIiLCJlbmMiOiJBMTI4Q0JDLUhTMjU2IiwidHlwIjoiSldUIn0..ZSyM02bfO4bnNPL9-fR8lA.2WoFReKIrqoIDtYiSJL5tOUXqlDCdEYs5qbBAEnvqSFYmAZiQkZrz6PDbsbV84DagaCk1Een-zrWDjl974PtECF-JFUCyNsdWuY8HkF4ufRRN1X3feTLeF_WlQJt-4jHYyGPRUZ7ctqLJzik1VGT9nsiiAZQjRj6CZ2REJM79w5AxtEnXn5vd1PoGvKQM3rKkgDYcNX4VcxrgHrAs9B65zjx5AVyn_L5ReLlqkqzmNp7IE7py4kOYg2J3BseWCnn.YNRQd4zkRHN8De6YGnri3Q/proxy",
+    "https://kkb-production.jupyter-proxy.kaggle.net/k/353944096/eyJhbGciOiJkaXIiLCJlbmMiOiJBMTI4Q0JDLUhTMjU2IiwidHlwIjoiSldUIn0..bGCEM_NI-4lcLyPY9H0PEg.q4yxML2todVQIQAyKAXz7gyo3edPQxzAXERNNL3apiqSQI_hhcInb8wuY-p3Z0bzMAL01CnLpgizDgjghkCxvQxuvOY9p2r1Gxkul9xRTLjG1sRO_HiH6QZ_yvH7uWz79O_r85s1bTs6injpjULAMDGuG8pLiYzcWJOxwoZ3O-F-ToG0X-5TWWkvbD_xvrp2V3onUcbcjj813ms_UVqz1dDEz1NgrM4dnXdFn07xWV7bnPf4jHe60HM_4Kswly5w.qdRSjYhCEDf1TzTHzY2GEA/proxy",
 )
 
 def check_and_update_proxy(resp_headers):
