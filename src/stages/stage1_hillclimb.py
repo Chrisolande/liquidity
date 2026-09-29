@@ -54,7 +54,7 @@ def comp_metric_eval(y_true: np.ndarray, y_pred: np.ndarray) -> float:
     return float(comp)
 
 
-def run_tuned_catboost_ms(
+def run_tuned_catboost(
     X_tr: pd.DataFrame,
     y_tr: np.ndarray,
     X_va: pd.DataFrame,
@@ -62,38 +62,36 @@ def run_tuned_catboost_ms(
     X_te: pd.DataFrame,
     cat_cols: List[str],
     params: Dict,
-    seeds: List[int] = (42, 2026),
+    seed: int = SEED,
 ) -> Tuple[np.ndarray, np.ndarray]:
     cat_idx = [X_tr.columns.get_loc(c) for c in cat_cols if c in X_tr.columns]
-    val_preds_seeds = []
-    test_preds_seeds = []
     task_type = "GPU" if HAS_GPU else "CPU"
 
-    for s in seeds:
-        cb = CatBoostClassifier(
-            loss_function="Logloss",
-            eval_metric="Logloss",
-            iterations=params.get("iterations", 900),
-            learning_rate=params.get("learning_rate", 0.035),
-            depth=params.get("depth", 7),
-            l2_leaf_reg=params.get("l2_leaf_reg", 25.0),
-            random_strength=params.get("random_strength", 1.0),
-            bagging_temperature=params.get("bagging_temperature", 0.3),
-            task_type=task_type,
-            random_seed=s,
-            verbose=False,
-        )
-        cb.fit(
-            X_tr, y_tr,
-            eval_set=(X_va, y_va),
-            cat_features=cat_idx,
-            early_stopping_rounds=40,
-            verbose=False,
-        )
-        val_preds_seeds.append(cb.predict_proba(X_va)[:, 1])
-        test_preds_seeds.append(cb.predict_proba(X_te)[:, 1])
+    cb = CatBoostClassifier(
+        loss_function="Logloss",
+        eval_metric="Logloss",
+        iterations=params.get("iterations", 900),
+        learning_rate=params.get("learning_rate", 0.035),
+        depth=params.get("depth", 7),
+        l2_leaf_reg=params.get("l2_leaf_reg", 12.0),
+        random_strength=params.get("random_strength", 0.8),
+        bagging_temperature=params.get("bagging_temperature", 0.2),
+        border_count=128,
+        task_type=task_type,
+        random_seed=seed,
+        verbose=False,
+    )
+    cb.fit(
+        X_tr, y_tr,
+        eval_set=(X_va, y_va),
+        cat_features=cat_idx,
+        early_stopping_rounds=40,
+        verbose=False,
+    )
+    val_preds = cb.predict_proba(X_va)[:, 1]
+    test_preds = cb.predict_proba(X_te)[:, 1]
 
-    return np.mean(val_preds_seeds, axis=0), np.mean(test_preds_seeds, axis=0)
+    return np.clip(val_preds, FLOOR, CEIL), np.clip(test_preds, FLOOR, CEIL)
 
 
 def run_tuned_lightgbm(
@@ -218,30 +216,30 @@ def run_stage1_hillclimb(
     # 3. Define Diverse Model Candidates
     model_specs = [
         (
-            "cb_tuned_d7_ms",
-            "CatBoost GPU Tuned Depth 7 (Multi-Seed [42, 2026])",
-            lambda xtr, ytr, xva, yva, xte: run_tuned_catboost_ms(
+            "cb_tuned_d7",
+            "CatBoost GPU Tuned Depth 7 (Seed 42)",
+            lambda xtr, ytr, xva, yva, xte: run_tuned_catboost(
                 xtr, ytr, xva, yva, xte, active_cats,
-                {"depth": 7, "learning_rate": 0.035, "l2_leaf_reg": 25.0, "random_strength": 1.0, "iterations": 900},
-                seeds=[42, 2026],
+                {"depth": 7, "learning_rate": 0.035, "l2_leaf_reg": 12.0, "random_strength": 0.8, "iterations": 900},
+                seed=SEED,
             ),
         ),
         (
             "lgb_leaf_wise",
-            "LightGBM Leaf-Wise (num_leaves=45, min_child=40)",
+            "LightGBM Leaf-Wise (num_leaves=35, min_child=30)",
             lambda xtr, ytr, xva, yva, xte: run_tuned_lightgbm(
                 xtr, ytr, xva, yva, xte, active_cats,
-                {"num_leaves": 45, "learning_rate": 0.030, "min_child_samples": 40, "feature_fraction": 0.70, "bagging_fraction": 0.80},
+                {"num_leaves": 35, "learning_rate": 0.030, "min_child_samples": 30, "feature_fraction": 0.70, "bagging_fraction": 0.85, "reg_lambda": 1.0, "lambda_l1": 0.25},
                 seed=SEED,
             ),
         ),
         (
             "lgb_extra_trees",
-            "LightGBM ExtraTrees (colsample=0.60, min_child=60)",
+            "LightGBM ExtraTrees (colsample=0.60, min_child=40)",
             lambda xtr, ytr, xva, yva, xte: run_tuned_lightgbm(
                 xtr, ytr, xva, yva, xte, active_cats,
-                {"num_leaves": 40, "learning_rate": 0.030, "min_child_samples": 60, "feature_fraction": 0.60, "bagging_fraction": 0.75, "extra_trees": True},
-                seed=2026,
+                {"num_leaves": 40, "learning_rate": 0.030, "min_child_samples": 40, "feature_fraction": 0.60, "bagging_fraction": 0.75, "reg_lambda": 2.0, "extra_trees": True},
+                seed=SEED,
             ),
         ),
     ]
@@ -249,8 +247,11 @@ def run_stage1_hillclimb(
     candidate_oof: Dict[str, np.ndarray] = {"oof_anchor": oof_anchor}
     candidate_test: Dict[str, np.ndarray] = {"oof_anchor": test_anchor}
 
+    from src.baseline import build_composite_strata
+    strata = build_composite_strata(train_fe, target_col=target_col, n_splits=n_splits)
+
     skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=SEED)
-    fold_indices = list(skf.split(X_tr_sel, y_train))
+    fold_indices = list(skf.split(X_tr_sel, strata))
 
     for key, label, trainer in model_specs:
         print(f"\n>>> Training Candidate: {label} <<<", flush=True)
@@ -268,7 +269,7 @@ def run_stage1_hillclimb(
             test_preds.append(test_p)
 
             f_ll, f_auc, f_comp = competition_score(y_va, val_p)
-            print(f"  Fold {fold}/{N_SPLITS} | Comp: {f_comp:.5f} | AUC: {f_auc:.5f} | LL: {f_ll:.5f}", flush=True)
+            print(f"  Fold {fold}/{n_splits} | Comp: {f_comp:.5f} | AUC: {f_auc:.5f} | LL: {f_ll:.5f}", flush=True)
 
         m_test = np.mean(test_preds, axis=0)
         m_ll, m_auc, m_comp = competition_score(y_train, m_oof)

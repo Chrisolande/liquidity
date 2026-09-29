@@ -188,7 +188,7 @@ def run_stage2(
     test_path: str = None,
     output_dir: str = "checkpoints",
     sub_dir: str = "submissions",
-    seeds: Sequence[int] = (42, 2026),
+    seeds: Sequence[int] = (42,),
     n_splits: int = 10,
     k_top_features: int = 60,
 ) -> float:
@@ -249,13 +249,13 @@ def run_stage2(
     print(f"  dom3_cols (Physics + Digital + Momentum): {len(dom3_cols)} features", flush=True)
     print(f"  dom_triage_cols (Physics + Triage)      : {len(dom_triage_cols)} features", flush=True)
 
-    # 4. Define the 5 Zoo Architectures
+    # 4. Define the 5 Zoo Architectures (Aligned with Optuna Bayesian Tuning)
     architectures = [
-        ("cb_d7_dom26", CatBoostClassifier, {"depth": 7, "learning_rate": 0.038, "l2_leaf_reg": 20.0, "iterations": 750}, dom2_cols),
-        ("cb_d6_dom35", CatBoostClassifier, {"depth": 6, "learning_rate": 0.038, "l2_leaf_reg": 15.0, "iterations": 750}, dom3_cols),
-        ("xgb_d4_dom35", XGBClassifier, {"max_depth": 4, "learning_rate": 0.035, "min_child_weight": 5.0, "subsample": 0.85, "colsample_bytree": 0.75, "reg_lambda": 5.0, "reg_alpha": 0.5, "n_estimators": 750}, dom3_cols),
-        ("xgb_d4_triage", XGBClassifier, {"max_depth": 4, "learning_rate": 0.035, "min_child_weight": 5.0, "subsample": 0.85, "colsample_bytree": 0.75, "reg_lambda": 5.0, "reg_alpha": 0.5, "n_estimators": 750}, dom_triage_cols),
-        ("lgb_extra", lgb.LGBMClassifier, {"num_leaves": 45, "learning_rate": 0.030, "min_child_samples": 60, "colsample_bytree": 0.60, "subsample": 0.75, "subsample_freq": 1, "reg_lambda": 5.0, "n_estimators": 750, "extra_trees": True}, list(selected_cols)),
+        ("cb_d6_dom26", CatBoostClassifier, {"depth": 6, "learning_rate": 0.045, "l2_leaf_reg": 10.0, "random_strength": 1.5, "bagging_temperature": 0.4, "iterations": 750}, dom2_cols),
+        ("cb_d6_dom35", CatBoostClassifier, {"depth": 6, "learning_rate": 0.045, "l2_leaf_reg": 10.0, "random_strength": 1.5, "bagging_temperature": 0.4, "iterations": 750}, dom3_cols),
+        ("xgb_d4_dom35", XGBClassifier, {"max_depth": 4, "learning_rate": 0.025, "min_child_weight": 3.0, "subsample": 0.75, "colsample_bytree": 0.70, "reg_lambda": 2.5, "reg_alpha": 0.45, "n_estimators": 750}, dom3_cols),
+        ("xgb_d4_triage", XGBClassifier, {"max_depth": 4, "learning_rate": 0.025, "min_child_weight": 3.0, "subsample": 0.75, "colsample_bytree": 0.70, "reg_lambda": 2.5, "reg_alpha": 0.45, "n_estimators": 750}, dom_triage_cols),
+        ("lgb_extra", lgb.LGBMClassifier, {"num_leaves": 35, "learning_rate": 0.030, "min_child_samples": 30, "colsample_bytree": 0.70, "subsample": 0.85, "subsample_freq": 1, "reg_lambda": 1.0, "reg_alpha": 0.25, "n_estimators": 750, "extra_trees": True}, list(selected_cols)),
     ]
 
     zoo_oof: Dict[str, np.ndarray] = {}

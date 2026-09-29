@@ -24,7 +24,7 @@ def fit_gbdt_runner(
     X_test: pd.DataFrame,
     folds: List[Tuple[np.ndarray, np.ndarray]],
     cat_cols: List[str],
-    seeds: Sequence[int] = (42, 100),
+    seeds: Sequence[int] = (42,),
     fold_data_cache: Any = None,
 ) -> Tuple[np.ndarray, np.ndarray, Tuple[float, float, float]]:
     """Unified cross-validation, bagging, fold target encoding, and prediction runner."""

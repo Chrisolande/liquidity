@@ -66,7 +66,7 @@ def run_catboost_multistrata(
     cat_indices: List[int],
 ) -> Tuple[np.ndarray, np.ndarray]:
     task_type = "GPU" if HAS_GPU else "CPU"
-    seeds = params.get("seeds", [42, 2026])
+    seeds = params.get("seeds", [42])
     val_preds_seeds = []
     test_preds_seeds = []
     obj_cols = xtr.select_dtypes(include=['category', 'object']).columns.tolist()
@@ -120,7 +120,7 @@ def run_xgboost_multistrata(
             xva_xgb[c] = xva_xgb[c].astype(str).map(mapping).fillna(-1).astype(int)
             xte_xgb[c] = xte_xgb[c].astype(str).map(mapping).fillna(-1).astype(int)
 
-    seeds = params.get("seeds", [42, 2026])
+    seeds = params.get("seeds", [42])
     val_preds_seeds = []
     test_preds_seeds = []
 
@@ -178,7 +178,7 @@ def run_lightgbm_multistrata(
 
     lgb_tr = lgb.Dataset(xtr_lgb, label=ytr, categorical_feature=cat_cols_present, free_raw_data=False)
     lgb_va = lgb.Dataset(xva_lgb, label=yva, reference=lgb_tr, categorical_feature=cat_cols_present, free_raw_data=False)
-    seeds = params.get("seeds", [42, 2026])
+    seeds = params.get("seeds", [42])
     val_preds_seeds = []
     test_preds_seeds = []
     for s in seeds:
@@ -277,27 +277,27 @@ def run_multistrata_pipeline(
         ("ms_cb_w2_d5", "MultiStrata CatBoost GPU Depth 5",
          lambda xtr, ytr, xva, yva, xte: run_catboost_multistrata(
              xtr, ytr, xva, yva, xte,
-             {"depth": 5, "learning_rate": 0.035, "l2_leaf_reg": 45.0, "random_strength": 1.5, "bagging_temperature": 0.30, "seeds": [42, 2026]},
+             {"depth": 5, "learning_rate": 0.035, "l2_leaf_reg": 45.0, "random_strength": 1.5, "bagging_temperature": 0.30, "seeds": [42]},
              cat_indices)),
         ("ms_cb_w2_d6", "MultiStrata CatBoost GPU Depth 6",
          lambda xtr, ytr, xva, yva, xte: run_catboost_multistrata(
              xtr, ytr, xva, yva, xte,
-             {"depth": 6, "learning_rate": 0.032, "l2_leaf_reg": 35.0, "random_strength": 1.0, "bagging_temperature": 0.35, "seeds": [42, 2026]},
+             {"depth": 6, "learning_rate": 0.032, "l2_leaf_reg": 35.0, "random_strength": 1.0, "bagging_temperature": 0.35, "seeds": [42]},
              cat_indices)),
         ("ms_cb_w2_d7", "MultiStrata CatBoost GPU Depth 7",
          lambda xtr, ytr, xva, yva, xte: run_catboost_multistrata(
              xtr, ytr, xva, yva, xte,
-             {"depth": 7, "learning_rate": 0.030, "l2_leaf_reg": 25.0, "random_strength": 0.8, "bagging_temperature": 0.25, "seeds": [42, 2026]},
+             {"depth": 7, "learning_rate": 0.030, "l2_leaf_reg": 25.0, "random_strength": 0.8, "bagging_temperature": 0.25, "seeds": [42]},
              cat_indices)),
         ("ms_xgb_d4", "MultiStrata XGBoost GPU Depth 4",
          lambda xtr, ytr, xva, yva, xte: run_xgboost_multistrata(
              xtr, ytr, xva, yva, xte,
-             {"max_depth": 4, "learning_rate": 0.035, "subsample": 0.85, "colsample_bytree": 0.75, "reg_lambda": 5.0, "reg_alpha": 0.5, "seeds": [42, 2026]},
+             {"max_depth": 4, "learning_rate": 0.035, "subsample": 0.85, "colsample_bytree": 0.75, "reg_lambda": 5.0, "reg_alpha": 0.5, "seeds": [42]},
              categorical_cols)),
         ("ms_xgb_d5", "MultiStrata XGBoost GPU Depth 5",
          lambda xtr, ytr, xva, yva, xte: run_xgboost_multistrata(
              xtr, ytr, xva, yva, xte,
-             {"max_depth": 5, "learning_rate": 0.032, "subsample": 0.80, "colsample_bytree": 0.70, "reg_lambda": 5.0, "reg_alpha": 0.5, "seeds": [42, 2026]},
+             {"max_depth": 5, "learning_rate": 0.032, "subsample": 0.80, "colsample_bytree": 0.70, "reg_lambda": 5.0, "reg_alpha": 0.5, "seeds": [42]},
              categorical_cols)),
         ("ms_lgb_d4", "MultiStrata LightGBM Depth 4 Leaves 15",
          lambda xtr, ytr, xva, yva, xte: run_lightgbm_multistrata(

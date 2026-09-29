@@ -81,11 +81,12 @@ def build_catboost(seed: int = SEED) -> CatBoostClassifier:
         loss_function="Logloss",
         eval_metric="Logloss",
         iterations=900,
-        learning_rate=0.035,
-        depth=6,
-        l2_leaf_reg=12.0,
-        random_strength=0.8,
-        bagging_temperature=0.0,
+        learning_rate=0.045,         # Optuna tuned
+        depth=6,                     # Optuna tuned (d=6 prevents over-partitioning)
+        l2_leaf_reg=10.0,            # Optuna tuned (lighter reg restores gradient steps)
+        random_strength=1.5,         # Optuna tuned
+        bagging_temperature=0.4,     # Optuna tuned
+        border_count=128,
         task_type=task_type,
         random_seed=seed,
         verbose=False,
@@ -94,38 +95,44 @@ def build_catboost(seed: int = SEED) -> CatBoostClassifier:
 
 def build_xgboost(seed: int = SEED) -> XGBClassifier:
     return XGBClassifier(
-        n_estimators=700,
-        learning_rate=0.032,
-        max_depth=5,
-        subsample=0.80,
-        colsample_bytree=0.80,
-        reg_lambda=2.0,
-        reg_alpha=0.1,
-        min_child_weight=5.0,
+        n_estimators=800,
+        learning_rate=0.025,         # Optuna tuned
+        max_depth=4,                 # Optuna tuned (d=4 decisively beat d=5/6)
+        min_child_weight=3.0,        # Optuna tuned
+        subsample=0.75,              # Optuna tuned
+        colsample_bytree=0.70,       # Optuna tuned
+        reg_lambda=2.5,              # Optuna tuned
+        reg_alpha=0.45,              # Optuna tuned (higher L1 penalty ignores noisy splits)
         enable_categorical=True,
         tree_method="hist",
         device="cuda" if HAS_GPU else "cpu",
         random_state=seed,
         seed=seed,
         eval_metric="logloss",
-        early_stopping_rounds=75,
     )
 
 
 def build_lightgbm(seed: int = SEED) -> lgb.LGBMClassifier:
     return lgb.LGBMClassifier(
-        n_estimators=750,
+        n_estimators=800,
         learning_rate=0.030,
-        max_depth=5,
-        num_leaves=45,
-        min_child_samples=30,
-        subsample=0.80,
-        colsample_bytree=0.70,
-        reg_alpha=0.2,
-        reg_lambda=2.0,
+        num_leaves=35,               # Optuna tuned (optimal balance without leaf sparsity)
+        min_child_samples=30,        # Optuna tuned
+        colsample_bytree=0.70,       # Optuna tuned
+        subsample=0.85,              # Optuna tuned
+        subsample_freq=1,
+        reg_alpha=0.25,              # Optuna tuned
+        reg_lambda=1.0,              # Optuna tuned
         random_state=seed,
-        n_jobs=-1,
+        seed=seed,
+        bagging_seed=seed + 11,
+        feature_fraction_seed=seed + 22,
+        extra_seed=seed + 33,
+        data_random_seed=seed + 44,
+        deterministic=True,
+        force_col_wise=True,
         verbose=-1,
+        n_jobs=-1,
     )
 
 
@@ -286,7 +293,7 @@ def run_baseline(
     models_dir: str = "models",
     k_top_features: int = 60,
     n_splits: int = 10,
-    seeds: Tuple[int, ...] = (42, 2026),
+    seeds: Tuple[int, ...] = (42,),
 ) -> Tuple[float, np.ndarray, np.ndarray]:
     """
     Executes the upgraded baseline pipeline with family-level multi-seed averaging:
