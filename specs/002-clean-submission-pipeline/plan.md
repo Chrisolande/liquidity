@@ -1,4 +1,4 @@
-# Implementation Plan: Clean Validation, Stage 5 Preservation & Auditable Submission Pipeline
+# Implementation Plan: Clean Validation, Independent Domain Learning & Stage 5 Meta-Stacking
 
 **Branch**: `002-clean-submission-pipeline` | **Date**: 2026-09-29 | **Spec**: [specs/002-clean-submission-pipeline/spec.md](spec.md)
 
@@ -6,55 +6,57 @@
 
 ## Summary
 
-This plan implements a clean, auditable, leak-free validation and submission pipeline for `Chrisolande/liquidity` while preserving the existing ~#2 leaderboard tournament architecture (Stages 1 through 5, GBDT zoo, distillation, and Stage 5 meta-stacker). 
-
-Key deliverables:
-1. Fix known runtime defect in `src/stages/stage5_meta_stacker.py` (`best_floor` reference error).
-2. Enforce TabPFN foundation integrity across `pfn_phys` and `pfn_champ` views with 0% surrogate fallback.
-3. Implement `src/clean_pipeline.py` with fold-local feature screening, fold-local target encoding, raw prediction exports, single-pass regularized blending, and `experiment.json` manifest generation.
-4. Streamline `pipeline_reproduction.ipynb` with dual execution (Clean Path + Preserved Tournament Path).
-5. Add automated tests verifying leakage invariance and determinism.
+This plan implements the updated specification for `Chrisolande/liquidity` to:
+1. Preserve the multi-stage tournament architecture (Stages 1 through 5).
+2. Make Stage 2 an independent domain-specialized model zoo (learns domain structure independently; does NOT include Stage 1 anchor in its blend/calibration).
+3. Establish Stage 5 as the primary meeting point where the general-purpose champion (Stage 1) and the independent domain ensemble (Stage 2)—plus optional Stage 3/4 diversity—meet via genuine OOF predictions.
+4. Fix the Stage 5 `best_floor` runtime bug.
+5. Distinguish Clean Evaluation Mode from Experimental Competition Mode.
+6. Ensure full auditability and raw prediction preservation.
 
 ## Technical Context
 
 **Language/Version**: Python 3.10+  
-**Primary Dependencies**: LightGBM, CatBoost, XGBoost, PyTorch, Scikit-Learn, SciPy, Pandas, NumPy, optional TabPFN  
+**Primary Dependencies**: LightGBM, CatBoost, XGBoost, Scikit-Learn, SciPy, Pandas, NumPy, PyTorch, optional TabPFN  
 **Target Platform**: Linux (x86_64) / Kaggle GPU Environment  
 **Execution Budget**: < 4 hours total  
 **Evaluation Invariants**: `TARGET="liquidity_stress_next_30d"`, `ID_COL="ID"`, `FLOOR=0.0020`, `CEIL=0.9995`, `N_SPLITS=10`, `SEED=42`  
 
 ## Proposed Changes
 
-### Component 1: Runtime Bug Fixes & Code Health
+### Component 1: Fix Stage 5 Runtime Defect & Meta-Feature Verification
 - **`src/stages/stage5_meta_stacker.py`**: Fix line 332 replacing undefined `best_floor` with `FLOOR`.
-- **`src/models/tabpfn_model.py`**: Eliminate surrogate fallback branches; enforce genuine TabPFN execution on GPU or explicit error/skip.
+- Verify inputs (`oof_stage1`, `oof_stage2`, etc.) are genuine OOF arrays.
 
-### Component 2: Dedicated Clean Pipeline Module
+### Component 2: Stage 2 Decoupling from Stage 1 Anchor
+- **`src/stages/stage2_gbdt_zoo.py`**:
+  - Add parameter `include_anchor: bool = False` (default `False` in clean mode).
+  - When `False`, blend optimization optimizes exclusively over Stage 2 domain architectures (`cb_d7_dom26`, `cb_d6_dom35`, `xgb_d4_dom35`, `xgb_d4_triage`, `lgb_extra`).
+  - Preserve fold-local screening via `screen_features()` strictly on outer training slices.
+
+### Component 3: Dedicated Clean Pipeline Module
 - **`src/clean_pipeline.py`** [NEW]:
-  - `seed_everything(seed=42)` for deterministic initialization.
-  - Target-independent feature engineering via `engineer_features()`.
-  - 10-fold Stratified CV with fold-isolated `screen_features(x_tr_raw, y_tr, ...)`.
-  - Domain views: `dom2_cols`, `dom3_cols`, `dom_triage_cols`, and `selected_cols`.
-  - Fold-local target encoding via `apply_fold_target_encoding()` where needed.
-  - Model training: CatBoost (`cb_d7_dom26`), XGBoost (`xgb_d4_dom35`), LightGBM (`lgb_extra`), and TabPFN (`pfn_phys`, `pfn_champ`).
-  - Strict assertion: `assert oof_filled.all()`.
-  - Raw prediction artifact export: `artifacts/oof_*.npy`, `artifacts/test_*.npy`.
-  - Bounded regularized blend ($w_i \ge 0, \sum w_i = 1$) minimizing LogLoss on OOF.
-  - Final outputs: `submissions/submission_clean.csv` and `artifacts/experiment.json` with `LEAKAGE CHECK: PASS`.
+  - Coordinates Clean Evaluation Mode.
+  - Runs or loads clean Stage 1 general champion.
+  - Runs clean independent Stage 2 (without Stage 1 anchor).
+  - Runs Stage 5 meta-stacking combining Stage 1 and Stage 2 genuine OOF predictions.
+  - Asserts OOF completeness (`oof_filled.all()`).
+  - Saves raw arrays and `experiment.json` manifest with `LEAKAGE CHECK: PASS`.
 
-### Component 3: Notebook Streamlining & Dual Execution
+### Component 4: Notebook Streamlining & Dual Execution
 - **`pipeline_reproduction.ipynb`**:
-  - Cell 1: Setup & Environment Check.
-  - Cell 2: Clean Pipeline execution (`run_clean_pipeline()`).
-  - Cell 3: Clean Submission validation.
-  - Downstream Cells: Preserved Stage 1–5 tournament reproduction pipeline.
+  - Expose Clean Evaluation Mode in dedicated cells.
+  - Retain preserved Stage 1–5 tournament reproduction pipeline.
 
-### Component 4: Test Suite
-- **`tests/test_clean_pipeline.py`** [NEW]: Fast unit tests for fold-local screening invariance, OOF coverage verification, and bounded blend weights.
+### Component 5: Test Suite
+- **`tests/test_clean_pipeline.py`** [NEW]:
+  - Test Stage 2 independence (anchor omitted).
+  - Test fold-local screening invariance.
+  - Test Stage 5 execution and meta-feature alignment.
 
 ## Verification Plan
 
 1. `python -m compileall src`
 2. `pytest tests/test_clean_pipeline.py tests/test_leakage_invariance.py -v`
-3. Smoke run: `python -c "from src.clean_pipeline import run_clean_pipeline; run_clean_pipeline(seed=42, n_splits=3, k_top_features=20, run_tabpfn=False, output_dir='artifacts/smoke', sub_dir='submissions/smoke')"`
-4. Inspect `submissions/submission_clean.csv` and `artifacts/experiment.json`.
+3. Smoke run: `python -c "from src.clean_pipeline import run_clean_pipeline; run_clean_pipeline(seed=42, n_splits=3, k_top_features=20, run_stage2=True, run_tabpfn=False, output_dir='artifacts/smoke', sub_dir='submissions/smoke')"`
+4. Verify `submissions/submission_clean.csv` and `artifacts/experiment.json`.
