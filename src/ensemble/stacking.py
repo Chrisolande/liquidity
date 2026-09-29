@@ -68,15 +68,15 @@ def blend_and_calibrate(
     test_blend = expit(b_all + Z_test @ w_all)
     weight_map = {k: float(w) for k, w in zip(keys, w_all)}
 
-    # Platt Scaling Calibration
-    z_oof = logit(np.clip(oof_blend, 1e-6, 1.0 - 1e-6)).reshape(-1, 1)
-    z_test = logit(np.clip(test_blend, 1e-6, 1.0 - 1e-6)).reshape(-1, 1)
-
-    cal = LogisticRegression(C=1.0, solver="lbfgs")
-    cal.fit(z_oof, y_true)
-
-    oof_cal = np.clip(cal.predict_proba(z_oof)[:, 1], FLOOR, CEIL)
-    test_cal = np.clip(cal.predict_proba(z_test)[:, 1], FLOOR, CEIL)
+    # Cross-fitted Platt Scaling Calibration
+    from src.ensemble.calibration import platt_scaling_calibrate
+    oof_cal, test_cal, _ = platt_scaling_calibrate(
+        oof_prob=oof_blend,
+        test_prob=test_blend,
+        y_true=y_true,
+        n_splits=n_splits,
+        seed=seed,
+    )
     return weight_map, oof_blend, test_blend, oof_cal, test_cal
 
 

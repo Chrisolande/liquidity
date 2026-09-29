@@ -9,8 +9,8 @@
 
 **Purpose**: Test directory structure and environment readiness.
 
-- [ ] T001 Set up test harness and directory structure for unit tests and benchmarks in tests/ and experiments/
-- [ ] T002 [P] Verify pytest test runner configuration and dependencies in requirements.txt
+- [X] T001 Set up test harness and directory structure for unit tests and benchmarks in tests/ and experiments/
+- [X] T002 [P] Verify pytest test runner configuration and dependencies in requirements.txt
 
 ---
 
@@ -20,8 +20,8 @@
 **Goal**: Eliminate in-sample evaluation in `blend_and_calibrate()` by delegating calibration to `platt_scaling_calibrate()` so every evaluated probability is genuinely out-of-sample.  
 **Independent Test**: Assert that `oof_cal` predictions in `blend_and_calibrate()` are generated via cross-fitting and do not match a global in-sample fit.
 
-- [ ] T003 [P] [US3] Create cross-fitted calibration unit test in tests/test_calibration_crossfit.py
-- [ ] T004 [US3] Update blend_and_calibrate() in src/ensemble/stacking.py to delegate to platt_scaling_calibrate()
+- [X] T003 [P] [US3] Create cross-fitted calibration unit test in tests/test_calibration_crossfit.py
+- [X] T004 [US3] Update blend_and_calibrate() in src/ensemble/stacking.py to delegate to platt_scaling_calibrate()
 
 ---
 
