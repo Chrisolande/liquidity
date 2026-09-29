@@ -15,7 +15,7 @@ except ImportError:
 
 PROXY_URL = os.environ.get(
     "KAGGLE_PROXY_URL",
-    "https://kkb-production.jupyter-proxy.kaggle.net/k/353944096/eyJhbGciOiJkaXIiLCJlbmMiOiJBMTI4Q0JDLUhTMjU2IiwidHlwIjoiSldUIn0..bGCEM_NI-4lcLyPY9H0PEg.q4yxML2todVQIQAyKAXz7gyo3edPQxzAXERNNL3apiqSQI_hhcInb8wuY-p3Z0bzMAL01CnLpgizDgjghkCxvQxuvOY9p2r1Gxkul9xRTLjG1sRO_HiH6QZ_yvH7uWz79O_r85s1bTs6injpjULAMDGuG8pLiYzcWJOxwoZ3O-F-ToG0X-5TWWkvbD_xvrp2V3onUcbcjj813ms_UVqz1dDEz1NgrM4dnXdFn07xWV7bnPf4jHe60HM_4Kswly5w.qdRSjYhCEDf1TzTHzY2GEA/proxy",
+    "https://kkb-production.jupyter-proxy.kaggle.net/k/353942949/eyJhbGciOiJkaXIiLCJlbmMiOiJBMTI4Q0JDLUhTMjU2IiwidHlwIjoiSldUIn0..QjjEeUdHCguE_XdxrLEZMA.Du-0vOLNsUJAKjSnZLz3IjWXqyPfaZ_ul9i3qpRDgYph2eyF9rZ2UWo2bxYfKn-yKrwF6HtaWdiyjpwruY-BnV_RCcBZWTJ-Gg1HoHT7w-as_ns3TUlWr_S9czZssjziVyEKR72lGrU9UEt6yuQCLADV5QIvV_U4Bz9HtHl0Jp_6SiAEb5O4KM232SwiuF1nrzEwhyZdC8maqs37ml8h325-dooqBkc7-3zeoNi8YrpmpD_okzXPWXNOkCs9UndP.A8uJQc020KoD1C5aFytuYQ/proxy",
 )
 
 def check_and_update_proxy(resp_headers):
