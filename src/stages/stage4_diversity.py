@@ -232,21 +232,17 @@ def run_stage4(
         # Fallback baseline teacher if no prior stage checkpoint exists
         test_t_cal = np.full(n_test, float(y_true.mean()))
 
-    # Temperature Sharpening (T = 0.85)
-    p_sharp = temperature_sharpen(test_t_cal, temperature=0.85)
-
     oof_student_cb = np.zeros(n_train, dtype=np.float64)
     test_student_cb = np.zeros(n_test, dtype=np.float64)
     oof_student_xgb = np.zeros(n_train, dtype=np.float64)
     test_student_xgb = np.zeros(n_test, dtype=np.float64)
-    pseudo_weight = 0.10
 
     cb_task = "GPU" if HAS_GPU else "CPU"
 
     for fold, (trn_idx, val_idx) in enumerate(folds):
-        X_fold_tr = np.vstack([X_tr_arr[trn_idx], X_te_arr])
-        y_fold_tr = np.r_[y_true[trn_idx], p_sharp]
-        w_fold_tr = np.r_[np.ones(len(trn_idx), dtype=np.float32), np.full(n_test, pseudo_weight, dtype=np.float32)]
+        X_fold_tr = X_tr_arr[trn_idx]
+        y_fold_tr = y_true[trn_idx]
+        w_fold_tr = np.ones(len(trn_idx), dtype=np.float32)
         X_fold_val = X_tr_arr[val_idx]
         y_fold_val = y_true[val_idx]
 

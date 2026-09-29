@@ -45,8 +45,8 @@
 **Goal**: Remove test-set pseudo-label injection and temperature sharpening ($T=0.85$) from student training.  
 **Independent Test**: Unit test confirming student training does not append test data and does not apply $T < 1.0$ probability sharpening.
 
-- [ ] T010 [P] [US4] Create Stage 4 de-risking test in tests/test_stage4_derisk.py
-- [ ] T011 [US4] Remove test-set pseudo-label injection and temperature sharpening (T=0.85) from src/stages/stage4_diversity.py
+- [X] T010 [P] [US4] Create Stage 4 de-risking test in tests/test_stage4_derisk.py
+- [X] T011 [US4] Remove test-set pseudo-label injection and temperature sharpening (T=0.85) from src/stages/stage4_diversity.py
 
 ---
 
