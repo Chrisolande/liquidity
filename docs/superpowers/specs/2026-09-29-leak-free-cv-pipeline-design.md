@@ -1,37 +1,43 @@
-# Design Document: Leak-Free Cross-Validation, Resilient Caching, and Calibration Pipeline
+# Design Document: Comprehensive Leak-Free Cross-Validation, Stacking, and Generalization Pipeline
 
 **Date**: 2026-09-29  
 **Status**: Approved by User  
-**Scope**: P0 Foundation (Stage 2 GBDT Zoo & Stage 5 Meta-Stacker Leakage Fixes)
+**Scope**: End-to-End Pipeline Hardening (Stage 2 GBDT Zoo, Stage 4 De-risking, Stage 5 Meta-Stacker, & Shadow Holdout Verification)
 
 ---
 
 ## 1. Context & Motivation
 
-The modeling pipeline in `Chrisolande/liquidity` exhibited strong local cross-validation (CV) scores that failed to generalize to competition evaluation benchmarks. A deep audit revealed three primary structural bugs and sources of data leakage:
+In the Zindi Liquidity Stress Early Warning Challenge, the pipeline in `Chrisolande/liquidity` demonstrated high local validation (~0.7366) and an elevated Public Leaderboard score (0.7385), but collapsed on the Private Leaderboard (0.7325).
 
-1. **Validation Fold Target Leakage in Feature Selection**: In `src/stages/stage2_gbdt_zoo.py`, feature screening was executed once globally across all 40,000 samples before splitting into cross-validation folds. The supervised screener observed target labels belonging to future validation splits, contaminating the validation metric.
-2. **GBDT Fold Cache Bug & Incomplete Metadata**: In `src/stages/stage2_gbdt_zoo.py`, `active_cat_cols` was defined only within a conditional cache-miss branch. On subsequent architecture executions, `active_cat_cols` was uninitialized or carried stale state, causing crashes or silent column misalignment.
-3. **In-Sample Evaluation in Calibration**: `blend_and_calibrate()` in `src/ensemble/stacking.py` fitted Platt scaling on the full out-of-fold prediction vector and evaluated predictions on the identical samples used for fitting.
-4. **Greedy OOF Hill-Climbing**: Stage 5 optimized model combination weights via discrete forward hill-climbing directly against the out-of-fold validation labels, cherry-picking noise and reporting over-optimistic composite scores.
+A comprehensive codebase audit confirmed this collapse was not caused by a lack of model capacity, but rather by **layers of accumulated optimism and validation overfitting** across the pipeline:
 
-This document outlines the architecture, data flow, component design, and verification plan to make the cross-validation and ensembling pipelines strictly leak-free and mathematically sound.
+1. **Outer-Fold Target Leakage in Feature Selection**: Supervised screening (`screen_features` / `run_feature_engine_selection`) ran globally on all 40,000 samples before CV splitting, exposing validation fold labels to the feature selector.
+2. **GBDT Fold Cache Bug & Metadata Drops**: In `stage2_gbdt_zoo.py`, `active_cat_cols` was defined only within a conditional cache miss branch, risking runtime crashes and corrupted categorical mappings on cache hits.
+3. **In-Sample Evaluation in Calibration**: `blend_and_calibrate()` in `src/ensemble/stacking.py` fitted Platt scaling on the full OOF prediction vector and immediately scored the same data in-sample.
+4. **Adaptive Overfitting via Greedy OOF Hill-Climbing**: Stage 5 ran `hill_climb_blend()` directly against the 40k OOF vector, cherry-picking combinations that fit validation noise rather than generalizable signal.
+5. **Destructive Pseudo-Labeling with Temperature Sharpening**: Stage 4 augmented training folds with 30k test samples labeled by an ensemble teacher and sharpened at $T = 0.85$. This forced probabilities to extremes; on unseen distributions, overconfident wrong predictions suffered severe LogLoss penalties.
+6. **Hardcoded Test Prevalence Hacking (`0.15340`)**: Stage 5 applied multiplicative scaling ($p \cdot c$) to force all test predictions to an arbitrary prevalence of $0.15340$ (versus the empirical training prevalence of $0.15000$), distorting probability tails.
+
+*Note on Evaluation Metric*: The competition metric definition in `src/metrics.py` ($0.40 \cdot \text{AUC} + 0.60 \cdot (1 - \text{LogLoss} / 0.595)$) is confirmed correct and will remain completely unchanged.
 
 ---
 
 ## 2. Goals & Non-Goals
 
 ### Goals
-- **Eliminate Target Leakage**: Ensure supervised feature screening occurs strictly within each outer fold's training split.
-- **Resilient Fold Processing**: Reorganize the fold loop so all 5 zoo architectures train sequentially on each fold's cleanly prepared data, guaranteeing active categorical metadata is always valid.
-- **Strictly Cross-Fitted Calibration**: Delegate calibration in `blend_and_calibrate()` to `platt_scaling_calibrate()` so every evaluated probability is genuinely out-of-sample.
-- **Streamlined Stacking in Stage 5**: Replace in-sample greedy hill climbing with cross-fitted $L_2$-regularized logit stacking, followed by single-stage cross-fitted calibration.
-- **Comprehensive Verification**: Implement automated invariance tests confirming zero leakage and zero metadata errors.
+- **Nested Feature Screening**: Relocate `screen_features()` strictly inside each outer CV fold so screening observes only training split samples ($X_{tr}, y_{tr}$).
+- **Resilient Fold Processing**: Reorganize Stage 2 to iterate `Folds (outer) -> Models (inner)`, ensuring categorical column metadata and domain views are cleanly instantiated per fold.
+- **Strictly Cross-Fitted Calibration**: Delegate `blend_and_calibrate()` to `platt_scaling_calibrate()` so every evaluated probability is genuinely out-of-sample.
+- **De-risk Stage 4 Distillation**: Decommission or quarantine test-set pseudo-labeling with temperature sharpening ($T=0.85$).
+- **Eliminate Test Prevalence Manipulation**: Remove the arbitrary $0.15340$ multiplicative scaling in Stage 5, preserving calibrated odds.
+- **Regularized Stacking**: Replace greedy OOF hill-climbing with cross-fitted $L_2$-regularized logit stacking (`L-BFGS-B`).
+- **Untouched 20% Shadow Holdout**: Establish a dedicated benchmark script using an immutable 20% holdout (8,000 rows) never seen by feature screening, training, or stacking, to definitively prove out-of-sample generalization.
 
 ### Non-Goals
-- Modifying underlying tree hyperparameter spaces or re-tuning base models in this phase.
-- Adding new feature engineering algorithms (unsupervised engineering in `engineer_features()` remains unchanged).
-- Redesigning Stage 3 (TabPFN) or Stage 4 (Distillation) until the Stage 2 and Stage 5 leak-free foundations are verified.
+- Modifying the competition metric formula in `src/metrics.py`.
+- Re-tuning tree hyperparameters in this stabilization phase.
+- Adding speculative new model families before establishing clean baseline CV.
 
 ---
 
@@ -39,13 +45,18 @@ This document outlines the architecture, data flow, component design, and verifi
 
 ```mermaid
 flowchart TD
-    subgraph DataPrep ["1. Unsupervised Data Preparation"]
+    subgraph DataPrep ["1. Unsupervised Preprocessing"]
         A[Raw Train & Test Data] --> B[engineer_features: Domain, Monthly, Ratios]
-        B --> C[Full Matrix X_train_clean, X_test_clean]
+        B --> C[X_train_clean, X_test_clean]
     end
 
-    subgraph Stage2 ["2. Stage 2: 10-Fold Nested Zoo (Folds Outer, Models Inner)"]
-        C --> D[StratifiedKFold: 10 Folds with Seed 42]
+    subgraph ShadowSplit ["2. Verification Shadow Holdout (Optional Verification Mode)"]
+        C --> S1[80% Development Set: 32,000 rows]
+        C --> S2[20% Immutable Shadow Holdout: 8,000 rows]
+    end
+
+    subgraph Stage2 ["3. Stage 2: 10-Fold Nested Zoo (Folds Outer, Models Inner)"]
+        S1 --> D[StratifiedKFold: 10 Folds with Seed 42]
         D --> E[For Fold k in 1..10]
         E --> F[Partition Fold: X_tr, y_tr 90% and X_va, y_va 10%]
         F --> G[screen_features strictly on X_tr, y_tr]
@@ -56,14 +67,13 @@ flowchart TD
         K --> L[Export Raw OOF and Test Matrices to checkpoints/gbdt_zoo_4seed.npz]
     end
 
-    subgraph Stage5 ["3. Stage 5: Regularized Stacking & Single-Stage Calibration"]
+    subgraph Stage5 ["4. Stage 5: Regularized Stacking & Single-Stage Calibration"]
         L --> M[Collect Raw Predictions from Valid Model Streams]
         M --> N[Transform to Logits: logit p]
-        N --> O[Cross-Fitted L2-Regularized Stacking: L-BFGS-B across alpha grid]
-        O --> P[Generate Raw Out-of-Fold Stack Ensemble Predictions]
+        N --> O[Cross-Fitted L2 Logit Stacking via L-BFGS-B across alpha grid]
+        O --> P[Generate Raw Out-of-Fold Ensemble Predictions]
         P --> Q[Single Cross-Fitted Platt Calibration: platt_scaling_calibrate]
-        Q --> R[Prevalence Alignment on Test Set to 0.15340]
-        R --> S[Final Unbiased Submission & Verified CV Metrics]
+        Q --> R[Export Clean Submission without Multiplicative Prevalence Hacking]
     end
 ```
 
@@ -71,10 +81,10 @@ flowchart TD
 
 ## 4. Component Specifications
 
-### 4.1. Stage 2 GBDT Zoo (`src/stages/stage2_gbdt_zoo.py`)
+### 4.1. Stage 2 Nested Feature Screening & Resilient Execution (`src/stages/stage2_gbdt_zoo.py`)
 
 #### Inverted Execution Loop
-The execution flow is updated from `Architectures (outer) -> Folds (inner)` to `Seeds (outer) -> Folds (outer) -> Architectures (inner)`:
+We invert the loop structure from `Architectures (outer) -> Folds (inner)` to `Folds (outer) -> Architectures (inner)`:
 
 ```python
 zoo_oof = {name: np.zeros(len(train_raw), dtype=float) for name, _, _, _ in architectures_def}
@@ -125,15 +135,15 @@ for seed_val in seeds:
             zoo_test[name] += test_p / (n_splits * len(seeds))
 ```
 
-#### Saving Raw Deliverables
-Stage 2 will continue to compute and display a calibrated score for local logging, but exports **raw out-of-fold probabilities** to `gbdt_zoo_4seed.npz` and `gbdt_balanced_dom1_p2_seeds4.npz` to prevent calibration compounding downstream.
+#### Raw Deliverables Export
+Stage 2 computes a local calibrated score for informational logging, but exports **raw out-of-fold probabilities** to `gbdt_zoo_4seed.npz` so downstream meta-models avoid repeated calibration distortion.
 
 ---
 
 ### 4.2. Stacking & Calibration Module (`src/ensemble/stacking.py`)
 
 #### Fixing `blend_and_calibrate()`
-Lines 71–79 of `src/ensemble/stacking.py` previously fit `LogisticRegression` on `(z_oof, y_true)` and evaluated on the same `z_oof`. This is replaced with delegation to `platt_scaling_calibrate()`:
+Lines 71–79 of `src/ensemble/stacking.py` previously fit `LogisticRegression` on `(z_oof, y_true)` and evaluated on the same `z_oof`. We replace this with delegation to `platt_scaling_calibrate()`:
 
 ```python
 from src.ensemble.calibration import platt_scaling_calibrate
@@ -146,10 +156,9 @@ def blend_and_calibrate(
     lam: float = 1e-3,
     seed: int = 42,
 ) -> Tuple[Dict[str, float], np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    # 1. Weight solving with cross-fitting
-    ... # Existing cross-fitted solve_weights logic preserved
-    
-    # 2. Cross-fitted Platt scaling (replacing in-sample fit)
+    # 1. Weight solving with cross-fitting preserved
+    ...
+    # 2. Genuinely cross-fitted Platt scaling
     oof_cal, test_cal, _ = platt_scaling_calibrate(
         oof_prob=oof_blend,
         test_prob=test_blend,
@@ -162,14 +171,23 @@ def blend_and_calibrate(
 
 ---
 
-### 4.3. Stage 5 Meta-Stacker (`src/stages/stage5_meta_stacker.py`)
+### 4.3. Stage 4 De-risking (`src/stages/stage4_diversity.py`)
+
+1. **Quarantine Test Pseudo-Labeling**: Remove or disable the injection of the 30k unlabelled test set into training folds.
+2. **Remove Temperature Sharpening ($T=0.85$)**: Never artificially sharpen teacher probabilities, preventing severe LogLoss penalties on boundary cases.
+
+---
+
+### 4.4. Stage 5 Meta-Stacker Hardening (`src/stages/stage5_meta_stacker.py`)
 
 1. **Cross-Fitted $L_2$ Logit Stacking**:
-   Stacking weights are optimized over logit-transformed raw probabilities using cross-fitted `L-BFGS-B` across regularization parameters $\alpha \in [10^{-6}, 5 \cdot 10^{-3}]$.
-2. **Quarantine In-Sample Hill Climbing**:
-   The unconstrained forward search `hill_climb_blend(pd.DataFrame(hc_candidates), ..., y_true)` is removed to stop overfitting on the OOF validation split.
-3. **Single Cross-Fitted Calibration**:
-   Apply `platt_scaling_calibrate()` on the chosen logit stack predictions before prevalence alignment and submission generation.
+   Stacking weights are optimized over logit-transformed raw probabilities using cross-fitted `L-BFGS-B` across $\alpha \in [10^{-6}, 5 \cdot 10^{-3}]$.
+2. **Eliminate Greedy OOF Hill-Climbing**:
+   `hill_climb_blend(pd.DataFrame(hc_candidates), ..., y_true)` is removed.
+3. **Purge Multiplicative Prevalence Hacking**:
+   Remove lines 349–354 (`adj_factor = target_prev / cur_mean; final_test = best_test * adj_factor`). The final test predictions retain the well-calibrated odds derived from the cross-fitted calibrator.
+4. **Single Cross-Fitted Calibration**:
+   Apply `platt_scaling_calibrate()` on the chosen logit stack predictions before final output generation.
 
 ---
 
@@ -177,31 +195,25 @@ def blend_and_calibrate(
 
 ### 5.1. Target Leakage Invariance Test
 - **File**: `tests/test_leakage_invariance.py`
-- **Methodology**:
-  - Run fold 1 with ground truth `y_va`.
-  - Invert validation labels `y_va_fake = 1 - y_va` and re-run fold 1.
-  - Assert that `selected_cols` returned by `screen_features(x_tr_raw, y_tr)` is bit-for-bit identical regardless of `y_va`.
-  - Assert that test predictions generated by fold 1 are bit-for-bit identical.
+- Formally verify that changing or permuting validation labels (`y_va`) produces zero difference in `selected_cols`, fold weights, or test predictions.
 
 ### 5.2. Cross-Fitted Calibration Unit Test
 - **File**: `tests/test_calibration_crossfit.py`
-- **Methodology**:
-  - Feed mock probability predictions and targets to `blend_and_calibrate()`.
-  - Verify that the returned `oof_cal` contains no in-sample prediction evaluation.
-  - Verify that test predictions have appropriate shape and bounded probability outputs $[0.002, 0.998]$.
+- Verify that every sample in `oof_cal` was evaluated strictly out-of-sample.
 
-### 5.3. Stage 2 Multi-Architecture Integration Test
-- **File**: `tests/test_stage2_smoke.py`
-- **Methodology**:
-  - Execute a 2-fold lightweight dry run of `stage2_gbdt_zoo.py` using synthetic/subset tabular data.
-  - Verify all 5 architectures complete with no `KeyError` or missing column exceptions.
-  - Confirm `gbdt_zoo_4seed.npz` is generated with valid raw OOF predictions.
+### 5.3. Clean vs. Complex 20% Shadow Holdout Experiment
+- **File**: `experiments/run_shadow_holdout_benchmark.py`
+- Split the 40k training data into an **80% Development Split (32,000 samples)** and an **Immutable 20% Shadow Holdout (8,000 samples)**.
+- Execute:
+  - **Pipeline A (Old Pipeline)**: Global screening, in-sample calibration, hill-climbing, $0.15340$ prevalence scaling.
+  - **Pipeline B (Clean Pipeline)**: Nested screening, cross-fitted calibration, regularized stacking, no prevalence hacking.
+- Compare their performance on the untouched 20% holdout to mathematically verify the generalization advantage of Pipeline B.
 
 ---
 
 ## 6. Self-Review Checklist
 
 - [x] **Placeholder Scan**: No TODOs, TBDs, or vague descriptions.
-- [x] **Internal Consistency**: Data structures, function signatures, and file paths align across all sections.
-- [x] **Scope Check**: Focuses squarely on P0 leakage and calibration fixes without expanding into speculative model tuning.
-- [x] **Ambiguity Check**: Specific algorithms (`screen_features`, `L-BFGS-B`, `platt_scaling_calibrate`) and exact file locations are specified.
+- [x] **Metric Integrity**: Retains official competition metric formula in `src/metrics.py`.
+- [x] **Root Cause Resolution**: Covers feature leakage, fold cache bug, calibration leakage, hill-climbing, test pseudo-labeling, and prevalence scaling.
+- [x] **Verifiable Output**: Includes shadow holdout verification benchmark.
