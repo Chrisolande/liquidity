@@ -73,7 +73,8 @@ def train_clean_model_fold(
     y_va: np.ndarray,
     x_te: pd.DataFrame,
     seed: int,
-) -> Tuple[np.ndarray, np.ndarray]:
+    verbose_eval: int = 0,
+) -> Tuple[np.ndarray, np.ndarray, int]:
     """Fits one model architecture on one fold for one seed deterministically."""
     sub_cols = [c for c in cols if c in x_tr.columns]
     sub_cats = [c for c in cat_cols if c in sub_cols]
@@ -91,7 +92,7 @@ def train_clean_model_fold(
         cat_indices = [x_tr_sub.columns.get_loc(c) for c in sub_cats]
         p["task_type"] = "GPU" if HAS_GPU else "CPU"
         p["random_seed"] = seed
-        p["verbose"] = False
+        p["verbose"] = verbose_eval if verbose_eval > 0 else False
         p["eval_metric"] = "Logloss"
         p["loss_function"] = "Logloss"
         model = CatBoostClassifier(**p)
@@ -100,10 +101,11 @@ def train_clean_model_fold(
             eval_set=(x_va_sub, y_va),
             cat_features=cat_indices if cat_indices else None,
             early_stopping_rounds=40,
-            verbose=False,
+            verbose=verbose_eval if verbose_eval > 0 else False,
         )
         val_prob = model.predict_proba(x_va_sub)[:, 1]
         test_prob = model.predict_proba(x_te_sub)[:, 1]
+        best_iter = getattr(model, "get_best_iteration", lambda: p.get("iterations", 650))()
 
     elif cls_ == XGBClassifier:
         p["device"] = "cuda" if HAS_GPU else "cpu"
@@ -116,10 +118,11 @@ def train_clean_model_fold(
         model.fit(
             x_tr_sub, y_tr,
             eval_set=[(x_va_sub, y_va)],
-            verbose=False,
+            verbose=verbose_eval if verbose_eval > 0 else False,
         )
         val_prob = model.predict_proba(x_va_sub)[:, 1]
         test_prob = model.predict_proba(x_te_sub)[:, 1]
+        best_iter = getattr(model, "best_iteration", p.get("n_estimators", 600))
 
     elif cls_ == lgb.LGBMClassifier:
         p_lgb = dict(p)
@@ -138,19 +141,23 @@ def train_clean_model_fold(
         })
         lgb_tr = lgb.Dataset(x_tr_sub, label=y_tr, categorical_feature=sub_cats)
         lgb_va = lgb.Dataset(x_va_sub, label=y_va, reference=lgb_tr, categorical_feature=sub_cats)
+        cbs = [lgb.early_stopping(40, verbose=False)]
+        if verbose_eval > 0:
+            cbs.append(lgb.log_evaluation(period=verbose_eval))
         model = lgb.train(
             p_lgb,
             lgb_tr,
             num_boost_round=p_lgb.get("n_estimators", 600),
             valid_sets=[lgb_va],
-            callbacks=[lgb.early_stopping(40, verbose=False)],
+            callbacks=cbs,
         )
         val_prob = model.predict(x_va_sub)
         test_prob = model.predict(x_te_sub)
+        best_iter = getattr(model, "best_iteration", p_lgb.get("n_estimators", 600))
     else:
         raise ValueError(f"Unknown classifier type: {cls_}")
 
-    return np.clip(val_prob, FLOOR, CEIL), np.clip(test_prob, FLOOR, CEIL)
+    return np.clip(val_prob, FLOOR, CEIL), np.clip(test_prob, FLOOR, CEIL), int(best_iter or 0)
 
 
 def optimize_bounded_blend(oof_dict: Dict[str, np.ndarray], y_true: np.ndarray) -> np.ndarray:
@@ -190,6 +197,7 @@ def run_clean_pipeline(
     n_splits: int = 10,
     k_top_features: int = 60,
     run_tabpfn: bool = False,
+    verbose_eval: int = 0,
 ) -> Dict[str, Any]:
     """
     Executes the clean, leak-free validation and submission pipeline.
@@ -271,12 +279,16 @@ def run_clean_pipeline(
             x_va = x_va_raw[selected_cols].copy()
             x_te = x_te_raw[[c for c in selected_cols if c in x_te_raw.columns]].copy()
 
+            print(f"\n  ┌─ [Seed {seed_val}] Fold {fold:02d}/{n_splits:02d} | Val Size: {len(val_idx):,} rows | Features Screened: {len(selected_cols)}", flush=True)
+            fold_val_preds = []
+
             # Train all 5 architectures on fold
             for name, cls_, params, col_fn in architectures_def:
+                t_m = time.time()
                 arch_cols = col_fn(dom2_cols, dom3_cols, dom_triage_cols, selected_cols)
                 arch_cats = [c for c in active_cats if c in arch_cols]
 
-                val_p, test_p = train_clean_model_fold(
+                val_p, test_p, best_iter = train_clean_model_fold(
                     model_name=name,
                     cls_=cls_,
                     params=params,
@@ -288,11 +300,28 @@ def run_clean_pipeline(
                     y_va=y_va,
                     x_te=x_te,
                     seed=seed_val + fold,
+                    verbose_eval=verbose_eval,
                 )
                 oof_dict[name][val_idx] += val_p / len(seeds)
                 test_dict[name] += test_p / (n_splits * len(seeds))
+                fold_val_preds.append(val_p)
 
-            print(f"  Fold {fold}/{n_splits} complete in {time.time() - t_fold:.1f}s | Selected Features: {len(selected_cols)}", flush=True)
+                m_ll, m_auc, m_comp = competition_score(y_va, val_p)
+                print(
+                    f"  │  ├─ {name:<14} (iter {best_iter:>3d}) -> Comp: {m_comp:.5f} | LogLoss: {m_ll:.5f} | AUC: {m_auc:.5f} ({time.time() - t_m:.1f}s)",
+                    flush=True,
+                )
+
+            fold_blend = np.mean(fold_val_preds, axis=0)
+            f_ll, f_auc, f_comp = competition_score(y_va, fold_blend)
+
+            # Progressive cumulative OOF across all evaluated rows so far
+            cov_idx = np.where(oof_covered)[0]
+            cov_blend = np.mean([oof_dict[m][cov_idx] for m in model_names], axis=0)
+            p_ll, p_auc, p_comp = competition_score(y_true[cov_idx], cov_blend)
+
+            print(f"  │  └─ Fold Equal-Blend: Comp = {f_comp:.5f} | LogLoss = {f_ll:.5f} | AUC = {f_auc:.5f}", flush=True)
+            print(f"  └─► Progressive Cumulative OOF ({len(cov_idx):,}/{n_train:,}): Comp = {p_comp:.5f} | AUC = {p_auc:.5f} | LL = {p_ll:.5f} [{time.time() - t_fold:.1f}s]\n", flush=True)
 
         # Confirm exactly one OOF prediction per row
         assert oof_covered.all(), "Critical Failure: Incomplete OOF coverage across training samples!"
