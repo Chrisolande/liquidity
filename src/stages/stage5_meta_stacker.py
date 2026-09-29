@@ -354,15 +354,27 @@ def run_stage5(
     final_ll, final_auc, final_comp = competition_score(y_true, final_oof)
     print(f"Stage 5 Final Meta-Stacker: Comp={final_comp:.5f} | AUC={final_auc:.5f} | LL={final_ll:.5f} | Floor={FLOOR:.4f} | Alpha={best_alpha:.6f}", flush=True)
 
-    out_csv = os.path.join(sub_dir, "submission_stage5_final.csv")
     sub_df = pd.DataFrame({ID_COL: test_ids, "Target": final_test})
+
+    # Primary submission file following user required format: submission_step13_4seed_xxxx.csv
+    step13_csv = os.path.join(sub_dir, f"submission_step13_4seed_{final_comp:.5f}.csv")
+    sub_df.to_csv(step13_csv, index=False)
+
+    # Mirror to root directory for immediate submission access
+    root_step13_csv = f"submission_step13_4seed_{final_comp:.5f}.csv"
+    sub_df.to_csv(root_step13_csv, index=False)
+
+    # Also save standard submission aliases
+    out_csv = os.path.join(sub_dir, "submission_stage5_final.csv")
     sub_df.to_csv(out_csv, index=False)
+    sub_df.to_csv("submission.csv", index=False)
 
     champ_out_csv = os.path.join(sub_dir, f"submission_champion_{final_comp:.5f}.csv")
     sub_df.to_csv(champ_out_csv, index=False)
 
     np.save(os.path.join(ckpt_dir, f"oof_stage5_{final_comp:.5f}.npy"), final_oof)
-    print(f"Saved final submission to {out_csv} and {champ_out_csv}")
+    print(f"Saved primary final submission to: {step13_csv} and {root_step13_csv}")
+    print(f"Saved aliases: {out_csv}, {champ_out_csv}, and submission.csv")
     return final_comp
 
 
