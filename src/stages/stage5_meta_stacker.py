@@ -217,7 +217,7 @@ def run_stage5(
     print(f"Retained {len(valid_streams)} quality streams for Meta-Stacker.")
 
     # Method 1: Correlation Pruning Filter (Drop redundant collinear streams with r > 0.996)
-    print("\n--- Method 1: Correlation Pruning Filter (Threshold r > 0.996) ---", flush=True)
+    print("\nPruning collinear streams (threshold r > 0.996)", flush=True)
     solo_scores = {k: competition_score(y_true, valid_streams[k])[2] for k in valid_streams}
     # Prioritize champ_anchor, then order by solo composite score
     priority_order = (
@@ -246,11 +246,11 @@ def run_stage5(
             pruned_test[m] = valid_test[m]
 
     for m, sc, r in dropped_info:
-        print(f"  [PRUNED] Dropped {m:<16} (Comp={sc:.5f}) -> {r}", flush=True)
+        print(f"  Pruned stream: {m:<16} (Comp={sc:.5f}) - {r}", flush=True)
 
     print(f"\nRetained {len(pruned_streams)} high-diversity streams for Meta-Stacker:", flush=True)
     for s in pruned_streams:
-        print(f"  ★ KEEP: {s:<16} (Comp={solo_scores[s]:.5f})", flush=True)
+        print(f"  Kept stream: {s:<16} (Comp={solo_scores[s]:.5f})", flush=True)
 
     valid_streams = pruned_streams
     valid_test = pruned_test
@@ -262,7 +262,7 @@ def run_stage5(
     X_test_logits = np.column_stack([logit(np.clip(valid_test[m], 1e-4, 1.0 - 1e-4)) for m in model_names])
 
     # 10-Fold Cross-Validated L2 Logit-Space Stacker with Analytical Gradient
-    print("\n--- Sweeping Logit Stacker L2 Regularization (10-Fold CV) ---", flush=True)
+    print("\nOptimizing logit stacker L2 regularization (10-fold CV)", flush=True)
     skf = StratifiedKFold(n_splits=10, shuffle=True, random_state=42)
 
     best_comp = 0.0
@@ -309,7 +309,7 @@ def run_stage5(
 
         p_eval = np.clip(oof_pred, 0.0020, 0.9980)
         ll, auc, comp = competition_score(y_true, p_eval)
-        print(f"  Alpha={alpha:8.6f} -> LL={ll:.5f} | AUC={auc:.5f} | Comp={comp:.5f}", flush=True)
+        print(f"  Alpha {alpha:8.6f}: LL={ll:.5f} | AUC={auc:.5f} | Comp={comp:.5f}", flush=True)
         if comp > best_comp:
             best_comp = comp
             best_oof = p_eval
@@ -319,7 +319,7 @@ def run_stage5(
     print(f"\nOptimal Alpha={best_alpha:.6f} with Logit Stacker OOF Score = {best_comp:.5f}")
 
     # Final Single-Stage Cross-Fitted Calibration
-    print("\n--- Final Single-Stage Cross-Fitted Calibration ---", flush=True)
+    print("Applying single-stage cross-fitted calibration", flush=True)
     final_oof, final_test, _ = platt_scaling_calibrate(
         oof_prob=best_oof,
         test_prob=best_test,
@@ -329,9 +329,7 @@ def run_stage5(
     )
 
     final_ll, final_auc, final_comp = competition_score(y_true, final_oof)
-    print("\n" + "=" * 80)
-    print(f"STAGE 5 FINAL META-STACKER: Comp={final_comp:.5f} | AUC={final_auc:.5f} | LL={final_ll:.5f} (Floor={best_floor:.4f})")
-    print("=" * 80, flush=True)
+    print(f"Stage 5 Final Meta-Stacker: Comp={final_comp:.5f} | AUC={final_auc:.5f} | LL={final_ll:.5f} (Floor={best_floor:.4f})", flush=True)
 
     out_csv = os.path.join(sub_dir, "submission_stage5_final.csv")
     sub_df = pd.DataFrame({ID_COL: test_ids, "Target": final_test})

@@ -1,5 +1,5 @@
 """
-End-to-end feature engineering pipeline integrating monthly, domain, stress, and Deotte interactions.
+End-to-end feature engineering pipeline integrating monthly, domain, stress, and categorical interactions.
 """
 
 from typing import List, Tuple
@@ -18,7 +18,7 @@ from src.features.domain import (
     add_longitudinal_stress_features,
     add_liquidity_runway_and_exhaustion_features,
     add_solvency_and_burn_collapse_features,
-    add_chris_deotte_features,
+    add_categorical_interaction_features,
 )
 
 
@@ -84,7 +84,7 @@ def engineer_features(
         combined = add_solvency_and_burn_collapse_features(combined)
 
     print("Computing categorical interactions and frequency encodings", flush=True)
-    combined, categorical_cols = add_chris_deotte_features(combined)
+    combined, categorical_cols = add_categorical_interaction_features(combined)
 
     for cat in categorical_cols:
         all_cats_unique = sorted(list(set(combined[cat].astype(str).dropna().unique())))

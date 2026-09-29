@@ -126,9 +126,7 @@ def run_stage4(
     skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=SEED)
     folds = list(skf.split(X_tr_arr, y_true))
 
-    # =========================================================================
-    # STAGE 4A: 10-FOLD 70k SELF-TRAINING DISTILLATION STUDENTS
-    # =========================================================================
+    # Stage 4A: 10-Fold Distillation Students
     # Ensure MultiStrata exists BEFORE building Grand Teacher
     ms_path = os.path.join(output_dir, "multistrata.npz")
     if not os.path.exists(ms_path):
@@ -298,9 +296,7 @@ def run_stage4(
         test_xgb_student=test_student_xgb,
     )
 
-    # =========================================================================
-    # STAGE 4B: PYTORCH NEURAL TABMLP
-    # =========================================================================
+    # Stage 4B: PyTorch Neural TabMLP
     print("Stage 4B: PyTorch Neural TabMLP Base Learner", flush=True)
     oof_mlp, test_mlp, mlp_comp = fit_mlp_runner(
         X_train=pd.DataFrame(X_tr_arr, columns=student_cols),

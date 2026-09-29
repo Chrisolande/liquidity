@@ -186,9 +186,7 @@ def run_stage2(
     target_col = TARGET if TARGET in train_raw.columns else "Target"
     y_true = train_raw[target_col].to_numpy(int)
 
-    print("=" * 80, flush=True)
-    print("STAGE 2: 2-SEED 10-FOLD DOMAIN GBDT ZOO (5 ARCHITECTURES)", flush=True)
-    print("=" * 80, flush=True)
+    print("Stage 2: 10-fold domain GBDT zoo (5 architectures)", flush=True)
 
     # 1. Load Anchor from Stage 1 / Baseline
     anchor_oof_path = os.path.join(output_dir, "oof_champ_train.npy")
@@ -201,9 +199,9 @@ def run_stage2(
 
     if oof_anchor is not None:
         a_ll, a_auc, a_comp = competition_score(y_true, oof_anchor)
-        print(f"✓ Loaded Stage Champion Anchor: Comp={a_comp:.5f} | AUC={a_auc:.5f} | LL={a_ll:.5f}", flush=True)
+        print(f"Loaded stage champion anchor: Comp={a_comp:.5f} | AUC={a_auc:.5f} | LL={a_ll:.5f}", flush=True)
     else:
-        print("Notice: oof_champ_train.npy not found. Stage 2 will proceed from scratch.", flush=True)
+        print("oof_champ_train.npy not found. Stage 2 will proceed from scratch.", flush=True)
         a_comp = 0.0
 
     # 2. Modern Feature Engineering & Selection
@@ -228,7 +226,7 @@ def run_stage2(
 
     # 4. Cross-Validation Loop: Folds Outer -> Models Inner (Leak-Free Nested Selection)
     for s_idx, seed_val in enumerate(seeds, start=1):
-        print(f"\n--- Cross-Validation Seed {seed_val} ({s_idx}/{len(seeds)}) ---", flush=True)
+        print(f"Running cross-validation seed {seed_val} ({s_idx}/{len(seeds)})", flush=True)
         skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=seed_val)
 
         for fold, (trn_idx, val_idx) in enumerate(skf.split(X_train_clean, y_true), start=1):
@@ -251,8 +249,6 @@ def run_stage2(
             x_va = x_va_raw[selected_cols].copy()
             x_te = x_te_raw[[c for c in selected_cols if c in x_te_raw.columns]].copy()
 
-            print(f"  [Fold {fold}/{n_splits}] Screened {len(selected_cols)} cols ({len(active_cats)} cats)", flush=True)
-
             # Train all 5 architectures on this fold's prepared data
             for name, cls_, params, col_fn in architectures_def:
                 arch_cols = col_fn(dom2_cols, dom3_cols, dom_triage_cols, selected_cols)
@@ -274,16 +270,12 @@ def run_stage2(
                 zoo_oof[name][val_idx] += val_p / len(seeds)
                 zoo_test[name] += test_p / (n_splits * len(seeds))
 
-            print(f"  --> Fold {fold} finished in {time.time() - t_fold:.1f}s", flush=True)
-
     for name, _, _, _ in architectures_def:
         ll, auc, comp = competition_score(y_true, zoo_oof[name])
-        print(f"  ==> {name} OOF: Comp={comp:.5f} | AUC={auc:.5f} | LL={ll:.5f}", flush=True)
+        print(f"  {name} OOF: Comp={comp:.5f} | AUC={auc:.5f} | LL={ll:.5f}", flush=True)
 
     # 6. Ensemble Optimization (incorporating anchor)
-    print("\n" + "=" * 80, flush=True)
-    print("PHASE 2: OPTIMIZING DOMAIN ZOO ENSEMBLE (COMPOSITE MAXIMIZATION)", flush=True)
-    print("=" * 80, flush=True)
+    print("\nOptimizing domain zoo ensemble weights", flush=True)
 
     blend_candidates_oof = dict(zoo_oof)
     blend_candidates_test = dict(zoo_test)
@@ -295,7 +287,7 @@ def run_stage2(
     candidate_names = list(blend_candidates_oof.keys())
     weights = optimize_composite_weights(blend_candidates_oof, y_true)
 
-    print("Stage 2 Learned Model Weights (Metric-Direct SLSQP):", flush=True)
+    print("Stage 2 learned model weights:", flush=True)
     for n, w in zip(candidate_names, weights):
         print(f"  {n:<16}: {w:.4f}", flush=True)
 
@@ -306,31 +298,29 @@ def run_stage2(
     raw_test = np.clip(T_mat @ weights, FLOOR, CEIL)
 
     r_ll, r_auc, r_comp = competition_score(y_true, raw_oof)
-    print(f"\nRaw Zoo Blend OOF: Comp={r_comp:.5f} | AUC={r_auc:.5f} | LL={r_ll:.5f}", flush=True)
+    print(f"Raw zoo blend OOF: Comp={r_comp:.5f} | AUC={r_auc:.5f} | LL={r_ll:.5f}", flush=True)
 
     # 7. Smooth Beta Calibration
-    print("\nStep 3: Cross-fitted Beta Calibration on Zoo Blend", flush=True)
+    print("Cross-fitted Beta Calibration on zoo blend", flush=True)
     cal_oof, cal_test, _ = beta_calibrate(raw_oof, raw_test, y_true, n_splits=5, seed=SEED)
     c_ll, c_auc, c_comp = competition_score(y_true, cal_oof)
-    print(f"Beta Calibrated Zoo OOF: Comp={c_comp:.5f} | AUC={c_auc:.5f} | LL={c_ll:.5f}", flush=True)
+    print(f"Beta calibrated zoo OOF: Comp={c_comp:.5f} | AUC={c_auc:.5f} | LL={c_ll:.5f}", flush=True)
 
     if c_comp >= r_comp and c_comp >= a_comp:
         final_oof, final_test = cal_oof, cal_test
         selected_name = "beta_calibrated_zoo"
-        print(f"  --> Adopted Calibrated Zoo (+{c_comp - a_comp:+.5f} vs Anchor).", flush=True)
+        print(f"Adopted calibrated zoo (+{c_comp - a_comp:+.5f} vs anchor).", flush=True)
     elif r_comp >= a_comp:
         final_oof, final_test = raw_oof, raw_test
         selected_name = "raw_zoo_blend"
-        print(f"  --> Adopted Raw Zoo (+{r_comp - a_comp:+.5f} vs Anchor).", flush=True)
+        print(f"Adopted raw zoo (+{r_comp - a_comp:+.5f} vs anchor).", flush=True)
     else:
         final_oof, final_test = oof_anchor, test_anchor
         selected_name = "preserved_anchor"
-        print("  --> Preserved Previous Anchor.", flush=True)
+        print("Preserved previous anchor.", flush=True)
 
     f_ll, f_auc, final_comp = competition_score(y_true, final_oof)
-    print("\n" + "=" * 80, flush=True)
-    print(f"★ FINAL STAGE 2 COMPOSITE SCORE: {final_comp:.5f} (AUC: {f_auc:.5f}, LL: {f_ll:.5f}) ★", flush=True)
-    print("=" * 80, flush=True)
+    print(f"Final Stage 2 score: Comp={final_comp:.5f} | AUC={f_auc:.5f} | LL={f_ll:.5f}", flush=True)
 
     # 8. Save Deliverables for Downstream Stages (Stage 3 & 4)
     save_payload = {}

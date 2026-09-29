@@ -167,9 +167,7 @@ def run_stage1_hillclimb(
     test_df = pd.read_csv(test_path)
     target_col = TARGET if TARGET in train_df.columns else "Target"
 
-    print("=" * 80, flush=True)
-    print("STAGE 1: METRIC-DIRECT STEPWISE HILL CLIMBING ENSEMBLING", flush=True)
-    print("=" * 80, flush=True)
+    print("Stage 1: Metric-direct stepwise hill climbing ensembling", flush=True)
 
     # 1. Load Anchor from Baseline (Auto-triggers baseline if missing)
     anchor_oof_path = os.path.join(output_dir, "oof_champ_train.npy")
@@ -178,7 +176,7 @@ def run_stage1_hillclimb(
         anchor_sub_path = os.path.join(sub_dir, "submission_best_0.73731.csv")
 
     if not (os.path.exists(anchor_oof_path) and os.path.exists(anchor_sub_path)):
-        print("Anchor artifacts not found on disk. Automatically running baseline first...", flush=True)
+        print("Anchor artifacts not found on disk. Running baseline first...", flush=True)
         from src.baseline import run_baseline
         run_baseline(
             train_path=train_path,
@@ -200,7 +198,7 @@ def run_stage1_hillclimb(
     y_train = train_df[target_col].to_numpy(int)
 
     a_ll, a_auc, a_comp = competition_score(y_train, oof_anchor)
-    print(f"✓ Loaded Baseline Anchor: Comp={a_comp:.5f} | AUC={a_auc:.5f} | LL={a_ll:.5f}", flush=True)
+    print(f"Loaded baseline anchor: Comp={a_comp:.5f} | AUC={a_auc:.5f} | LL={a_ll:.5f}", flush=True)
 
     # 2. Prepare Features via feature_engine
     print("\nStep 1: Engineering & selecting clean feature subset", flush=True)
@@ -253,7 +251,7 @@ def run_stage1_hillclimb(
     fold_indices = list(skf.split(X_tr_sel, y_train))
 
     for key, label, trainer in model_specs:
-        print(f"\n>>> Training Candidate: {label} <<<", flush=True)
+        print(f"Training candidate: {label}", flush=True)
         t0 = time.time()
         m_oof = np.zeros(len(train_df))
         test_preds = []
@@ -267,20 +265,15 @@ def run_stage1_hillclimb(
             m_oof[val_idx] = val_p
             test_preds.append(test_p)
 
-            f_ll, f_auc, f_comp = competition_score(y_va, val_p)
-            print(f"  Fold {fold}/{N_SPLITS} | Comp: {f_comp:.5f} | AUC: {f_auc:.5f} | LL: {f_ll:.5f}", flush=True)
-
         m_test = np.mean(test_preds, axis=0)
         m_ll, m_auc, m_comp = competition_score(y_train, m_oof)
-        print(f"  ==> {key} OOF: Comp={m_comp:.5f} | AUC={m_auc:.5f} | LL={m_ll:.5f} ({time.time() - t0:.1f}s)", flush=True)
+        print(f"  {key} OOF: Comp={m_comp:.5f} | AUC={m_auc:.5f} | LL={m_ll:.5f} ({time.time() - t0:.1f}s)", flush=True)
 
         candidate_oof[key] = m_oof
         candidate_test[key] = m_test
 
     # 4. Metric-Direct Stepwise Hill Climbing
-    print("\n" + "=" * 80, flush=True)
-    print("PHASE 2: METRIC-DIRECT STEPWISE HILL CLIMBING ENSEMBLING (via hillclimbers)", flush=True)
-    print("=" * 80, flush=True)
+    print("\nPhase 2: Metric-direct stepwise hill climbing ensembling", flush=True)
 
     oof_cand_df = pd.DataFrame(candidate_oof)
     test_cand_df = pd.DataFrame(candidate_test)
@@ -302,35 +295,33 @@ def run_stage1_hillclimb(
 
     blended_test, blended_oof = climb_res
     b_ll, b_auc, b_comp = competition_score(y_train, blended_oof)
-    print(f"\nRaw HillClimbers Blend OOF: Comp={b_comp:.5f} | AUC={b_auc:.5f} | LL={b_ll:.5f}", flush=True)
+    print(f"Raw blend OOF: Comp={b_comp:.5f} | AUC={b_auc:.5f} | LL={b_ll:.5f}", flush=True)
 
     # 5. Beta Calibration
-    print("\nStep 3: Cross-fitted Beta Calibration on HillClimber Output", flush=True)
+    print("Step 3: Cross-fitted Beta Calibration on blend output", flush=True)
     cal_oof, cal_test, calibrator = beta_calibrate(blended_oof, blended_test, y_train, n_splits=5, seed=SEED)
     c_ll, c_auc, c_comp = competition_score(y_train, cal_oof)
-    print(f"Beta Calibrated OOF: Comp={c_comp:.5f} | AUC={c_auc:.5f} | LL={c_ll:.5f}", flush=True)
+    print(f"Beta calibrated OOF: Comp={c_comp:.5f} | AUC={c_auc:.5f} | LL={c_ll:.5f}", flush=True)
 
     # Gating check: only adopt if >= raw blend and >= anchor
     if c_comp >= b_comp and c_comp >= a_comp:
         final_oof = cal_oof
         final_test = cal_test
         strategy_name = "hillclimb_beta_calibrated"
-        print(f"  --> Adopted Calibrated HillClimber (+{c_comp - a_comp:+.5f} vs Anchor).", flush=True)
+        print(f"Adopted calibrated blend (+{c_comp - a_comp:+.5f} vs anchor).", flush=True)
     elif b_comp >= a_comp:
         final_oof = blended_oof
         final_test = blended_test
         strategy_name = "hillclimb_raw_blend"
-        print(f"  --> Adopted Raw HillClimber (+{b_comp - a_comp:+.5f} vs Anchor).", flush=True)
+        print(f"Adopted raw blend (+{b_comp - a_comp:+.5f} vs anchor).", flush=True)
     else:
         final_oof = oof_anchor
         final_test = test_anchor
         strategy_name = "preserved_anchor"
-        print("  --> Preserved Baseline Anchor (HillClimber did not improve).", flush=True)
+        print("Preserved baseline anchor (blend did not improve).", flush=True)
 
     final_ll, final_auc, final_comp = competition_score(y_train, final_oof)
-    print("\n" + "=" * 80, flush=True)
-    print(f"★ FINAL STAGE 1 COMPOSITE SCORE: {final_comp:.5f} (AUC: {final_auc:.5f}, LL: {final_ll:.5f}) ★", flush=True)
-    print("=" * 80, flush=True)
+    print(f"Final Stage 1 score: Comp={final_comp:.5f} | AUC={final_auc:.5f} | LL={final_ll:.5f}", flush=True)
 
     # 6. Save Artifacts & Update Champion
     np.save(os.path.join(output_dir, "oof_champ_train.npy"), final_oof)

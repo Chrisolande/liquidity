@@ -159,7 +159,7 @@ def run_feature_engine_selection(
     3. Runs 5-fold CV importance ranking to retain top k_top numeric features.
     4. Merges protected domain anchors back into the dataset.
     """
-    print(f"--- Feature Selection: Initial count = {X_train.shape[1]} features ---", flush=True)
+    print(f"Feature selection: initial count = {X_train.shape[1]} features", flush=True)
 
     protected_cols = get_protected_features(list(X_train.columns), cat_cols)
     numeric_candidates = [
@@ -189,7 +189,7 @@ def run_feature_engine_selection(
     )
 
     print(
-        f"--- Feature Selection Complete: {len(selected_cols)} features selected (out of {X_train.shape[1]}) ---",
+        f"Feature selection complete: {len(selected_cols)} features selected (out of {X_train.shape[1]})",
         flush=True,
     )
     return X_train[selected_cols].copy(), X_test[selected_cols].copy(), selected_cols

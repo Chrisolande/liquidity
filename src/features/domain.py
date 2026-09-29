@@ -1,5 +1,5 @@
 """
-Domain feature engineering: entropy, behavioral shift, longitudinal stress, runway & exhaustion, Deotte playbook.
+Domain feature engineering: entropy, behavioral shift, longitudinal stress, runway & exhaustion, categorical interactions & frequency encoding.
 """
 
 from typing import Dict, List, Tuple
@@ -316,7 +316,7 @@ def add_solvency_and_burn_collapse_features(df: pd.DataFrame) -> pd.DataFrame:
     return pd.concat([df, pd.DataFrame(feature_data, index=df.index)], axis=1)
 
 
-def add_chris_deotte_features(df: pd.DataFrame) -> Tuple[pd.DataFrame, List[str]]:
+def add_categorical_interaction_features(df: pd.DataFrame) -> Tuple[pd.DataFrame, List[str]]:
     """Combinatorial interaction categoricals, frequency encoding, and transductive rankings."""
     feature_data: Dict[str, np.ndarray] = {}
 
@@ -366,3 +366,8 @@ def add_chris_deotte_features(df: pd.DataFrame) -> Tuple[pd.DataFrame, List[str]
 
     df_out = pd.concat([df, pd.DataFrame(feature_data, index=df.index)], axis=1)
     return df_out, all_cats
+
+
+# Alias for backward compatibility
+add_chris_deotte_features = add_categorical_interaction_features
+

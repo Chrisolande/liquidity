@@ -20,12 +20,10 @@ def run_stage1(
     seeds: tuple = (42, 2026),
 ) -> float:
     """Executes Stage 1 end-to-end: Baseline Anchor + Stepwise HillClimber."""
-    print("=" * 80)
-    print("STAGE 1: COMPLETE BASELINE + HILL CLIMBING PIPELINE")
-    print("=" * 80, flush=True)
+    print("Stage 1: Baseline and hill climbing pipeline", flush=True)
 
     # Step 1A: Generate Baseline Anchor
-    print(f"\n--- [Stage 1A] Baseline {len(seeds)}-Seed Unified Family Ensemble ({n_splits}-fold CV) ---", flush=True)
+    print(f"Stage 1A: Baseline {len(seeds)}-seed ensemble ({n_splits}-fold CV)", flush=True)
     b_comp, _, _ = run_baseline(
         train_path=train_path,
         test_path=test_path,
@@ -35,10 +33,10 @@ def run_stage1(
         n_splits=n_splits,
         seeds=seeds,
     )
-    print(f"✓ Baseline Anchor Completed: Comp={b_comp:.5f}", flush=True)
+    print(f"Baseline anchor completed: Comp={b_comp:.5f}", flush=True)
 
     # Step 1B: Stepwise Metric-Direct Hill Climbing
-    print("\n--- [Stage 1B] Metric-Direct Stepwise Hill Climbing ---", flush=True)
+    print("Stage 1B: Metric-direct stepwise hill climbing", flush=True)
     final_comp, _, _ = run_stage1_hillclimb(
         train_path=train_path,
         test_path=test_path,
@@ -47,7 +45,7 @@ def run_stage1(
         k_top_features=k_top_features,
         n_splits=n_splits,
     )
-    print(f"★ Stage 1 Final Score after Hill Climbing: Comp={final_comp:.5f} ★\n", flush=True)
+    print(f"Stage 1 final score: Comp={final_comp:.5f}\n", flush=True)
     return final_comp
 
 

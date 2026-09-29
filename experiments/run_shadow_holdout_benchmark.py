@@ -21,9 +21,7 @@ from src.ensemble.calibration import platt_scaling_calibrate
 
 
 def run_benchmark(n_samples: int = 1000, seed: int = SEED):
-    print("=" * 80)
-    print("SHADOW HOLDOUT VERIFICATION BENCHMARK")
-    print("=" * 80, flush=True)
+    print("Running shadow holdout verification benchmark...", flush=True)
 
     np.random.seed(seed)
 
@@ -49,11 +47,9 @@ def run_benchmark(n_samples: int = 1000, seed: int = SEED):
     print(f"Dataset partitioned: Dev={len(X_dev)} rows, Shadow Holdout={len(X_shadow)} rows.")
     print(f"Shadow Target Prevalence: {y_shadow.mean():.5f}\n")
 
-    # =========================================================================
     # Pipeline A: Legacy Optimistic Pipeline
     # 1. Global feature screening on all dev data
     # 2. In-sample calibration evaluation on dev
-    # =========================================================================
     from src.features.encoding import screen_features
     # Global selection on all dev data
     global_selected = screen_features(X_dev, y_dev, cat_cols=[], k_top=10, seed=seed)
@@ -80,16 +76,14 @@ def run_benchmark(n_samples: int = 1000, seed: int = SEED):
     ll_a_cv, auc_a_cv, comp_a_cv = competition_score(y_dev, oof_dev_a_cal)
     ll_a_sh, auc_a_sh, comp_a_sh = competition_score(y_shadow, shadow_preds_a_cal)
 
-    print("--- Pipeline A (Legacy Optimistic) ---")
+    print("Pipeline A (legacy validation):")
     print(f"  Reported Local CV Score    : Comp={comp_a_cv:.5f} | AUC={auc_a_cv:.5f} | LL={ll_a_cv:.5f}")
     print(f"  True Shadow Holdout Score  : Comp={comp_a_sh:.5f} | AUC={auc_a_sh:.5f} | LL={ll_a_sh:.5f}")
     print(f"  Optimism Gap (CV - Shadow) : {comp_a_cv - comp_a_sh:+.5f}\n")
 
-    # =========================================================================
     # Pipeline B: Clean Leak-Free Pipeline
     # 1. Fold-nested feature selection strictly on each outer fold
     # 2. Genuinely cross-fitted Platt calibration
-    # =========================================================================
     oof_dev_b = np.zeros(len(X_dev))
     shadow_preds_b = np.zeros(len(X_shadow))
 
@@ -109,16 +103,14 @@ def run_benchmark(n_samples: int = 1000, seed: int = SEED):
     ll_b_cv, auc_b_cv, comp_b_cv = competition_score(y_dev, oof_dev_b_cal)
     ll_b_sh, auc_b_sh, comp_b_sh = competition_score(y_shadow, shadow_preds_b_cal)
 
-    print("--- Pipeline B (Clean Leak-Free) ---")
+    print("Pipeline B (clean leak-free validation):")
     print(f"  Reported Local CV Score    : Comp={comp_b_cv:.5f} | AUC={auc_b_cv:.5f} | LL={ll_b_cv:.5f}")
     print(f"  True Shadow Holdout Score  : Comp={comp_b_sh:.5f} | AUC={auc_b_sh:.5f} | LL={ll_b_sh:.5f}")
     print(f"  Optimism Gap (CV - Shadow) : {comp_b_cv - comp_b_sh:+.5f}\n")
 
-    print("=" * 80)
-    print("VERIFICATION VERDICT:")
+    print("Benchmark summary:")
     if abs(comp_b_cv - comp_b_sh) <= abs(comp_a_cv - comp_a_sh):
-        print(f"✓ Pipeline B shows tighter alignment between CV and true unseen holdout ({abs(comp_b_cv - comp_b_sh):.5f} vs {abs(comp_a_cv - comp_a_sh):.5f}).")
-    print("=" * 80, flush=True)
+        print(f"Pipeline B shows tighter alignment between CV and true holdout ({abs(comp_b_cv - comp_b_sh):.5f} vs {abs(comp_a_cv - comp_a_sh):.5f}).", flush=True)
 
     return comp_b_sh >= comp_a_sh or abs(comp_b_cv - comp_b_sh) < abs(comp_a_cv - comp_a_sh)
 

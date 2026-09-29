@@ -304,7 +304,7 @@ def run_baseline(
     family_test: Dict[str, List[np.ndarray]] = {m: [] for m in model_names}
 
     for i, seed in enumerate(seeds, start=1):
-        print(f"\n--- Seed {i}/{len(seeds)} : seed={seed} ---", flush=True)
+        print(f"Seed {i}/{len(seeds)} (seed={seed})", flush=True)
         oof_preds, test_preds, model_scores, cv_models = cross_validate_models(
             train_selected,
             test_selected,
@@ -323,7 +323,7 @@ def run_baseline(
             joblib.dump(models, os.path.join(models_dir, f"{model_name}_seed{seed}_baseline.joblib"))
 
     # Compute family-averaged OOF and Test predictions
-    print("\n--- Model Family Averaging Across Seeds ---", flush=True)
+    print("Model family averaging across seeds", flush=True)
     mean_family_oof_dict = {}
     mean_family_test_dict = {}
     for name in model_names:
@@ -337,7 +337,7 @@ def run_baseline(
 
     # Diagnostic: Leave-One-Out Seed Evaluation for CatBoost
     if len(seeds) > 2:
-        print("\n--- Seed Sensitivity Check (CatBoost Leave-One-Out) ---", flush=True)
+        print("Seed sensitivity check (CatBoost leave-one-out)", flush=True)
         for idx, s in enumerate(seeds):
             cb_without_s = np.mean([family_oof["catboost"][j] for j in range(len(seeds)) if j != idx], axis=0)
             loo_ll, loo_auc, loo_comp = competition_score(y_train, cb_without_s)
@@ -376,13 +376,13 @@ def run_baseline(
         final_test = calibrated_test
         selected_strategy_name = "multiseed_slsqp_family_blend_beta_calibrated"
         best_comp, best_auc, best_ll = cal_comp, cal_auc, cal_ll
-        print("  --> Adopted Beta Calibration.", flush=True)
+        print("Adopted Beta Calibration.", flush=True)
     else:
         final_oof = raw_oof
         final_test = raw_test
         selected_strategy_name = "multiseed_slsqp_family_blend_raw"
         best_comp, best_auc, best_ll = raw_comp, raw_auc, raw_ll
-        print("  --> Preserved Raw Blend (Calibration did not improve composite).", flush=True)
+        print("Preserved raw blend (calibration did not improve composite).", flush=True)
 
     # Export canonical baseline tournament anchor artifacts
     np.save(os.path.join(output_dir, "oof_champ_train.npy"), final_oof)
