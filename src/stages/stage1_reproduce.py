@@ -17,7 +17,7 @@ def run_stage1(
     sub_dir: str = "submissions",
     k_top_features: int = 60,
     n_splits: int = 10,
-    seeds: tuple = (42, 100, 2024, 2026),
+    seeds: tuple = (42, 2026),
 ) -> float:
     """Executes Stage 1 end-to-end: Baseline Anchor + Stepwise HillClimber."""
     print("=" * 80)
