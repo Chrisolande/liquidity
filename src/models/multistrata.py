@@ -22,8 +22,11 @@ from catboost import CatBoostClassifier
 
 try:
     from iterstrat.ml_stratifiers import MultilabelStratifiedKFold
-except ImportError:
-    MultilabelStratifiedKFold = None
+except ImportError as e:
+    raise ImportError(
+        "iterative-stratification is strictly required for MultiStrata cohort stratification. "
+        "Install via: pip install iterative-stratification"
+    ) from e
 
 from src.config import (
     SEED,
@@ -236,16 +239,9 @@ def run_multistrata_pipeline(
     target_col = TARGET if TARGET in train_raw.columns else "Target"
 
     Y_multi = build_multilabel_stratification_matrix(train_raw)
-    try:
-        from iterstrat.ml_stratifiers import MultilabelStratifiedKFold
-        mskf = MultilabelStratifiedKFold(n_splits=N_SPLITS, shuffle=True, random_state=SEED)
-        split_gen = list(mskf.split(train_raw, Y_multi))
-        print("Using MultilabelStratifiedKFold for cohort stratification.", flush=True)
-    except Exception as e:
-        from sklearn.model_selection import StratifiedKFold
-        print(f"[MultiStrata] Notice: Using StratifiedKFold fallback ({e})", flush=True)
-        skf = StratifiedKFold(n_splits=N_SPLITS, shuffle=True, random_state=SEED)
-        split_gen = list(skf.split(train_raw, train_raw[target_col].to_numpy(dtype=int)))
+    mskf = MultilabelStratifiedKFold(n_splits=N_SPLITS, shuffle=True, random_state=SEED)
+    print("Executing strict MultilabelStratifiedKFold cohort stratification.", flush=True)
+    split_gen = list(mskf.split(train_raw, Y_multi))
 
     train_fe, test_fe, categorical_cols, numeric_cols = engineer_features(train_raw, test_raw)
     feature_cols = [c for c in train_fe.columns if c not in {target_col, ID_COL}]
