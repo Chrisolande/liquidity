@@ -81,28 +81,37 @@ def test_bounded_regularized_blend_weights():
 
 
 def test_stage2_anchor_omitted_when_flag_false():
-    """Verify that Stage 2 blend candidate names do not contain oof_anchor when include_anchor=False."""
-    architectures_def = [
-        ("cb_d7_dom26", None, {}, None),
-        ("cb_d6_dom35", None, {}, None),
-        ("xgb_d4_dom35", None, {}, None),
-        ("xgb_d4_triage", None, {}, None),
-        ("lgb_extra", None, {}, None),
-    ]
-    zoo_oof = {name: np.zeros(10) for name, _, _, _ in architectures_def}
+    """Verify that Stage 2 run_stage2 implementation strictly decouples from Stage 1 anchor."""
+    import inspect
+    from src.stages import stage2_gbdt_zoo
     
-    # Simulate Stage 2 candidate dictionary building with include_anchor=False
-    include_anchor = False
-    oof_anchor = np.ones(10) * 0.5
+    src = inspect.getsource(stage2_gbdt_zoo.run_stage2)
+    # The source must assert oof_anchor is not in blend candidates
+    assert 'assert "oof_anchor" not in blend_candidates_oof' in src
+    # blend_candidates_oof must never have oof_anchor added
+    assert 'blend_candidates_oof["oof_anchor"]' not in src
+    assert 'blend_candidates_test["oof_anchor"]' not in src
     
-    blend_candidates_oof = dict(zoo_oof)
-    if include_anchor and oof_anchor is not None:
-        blend_candidates_oof["oof_anchor"] = oof_anchor
-        
-    candidate_names = list(blend_candidates_oof.keys())
-    assert "oof_anchor" not in candidate_names
-    assert len(candidate_names) == 5
-    assert set(candidate_names) == {"cb_d7_dom26", "cb_d6_dom35", "xgb_d4_dom35", "xgb_d4_triage", "lgb_extra"}
+    # Module docstring check
+    doc = stage2_gbdt_zoo.__doc__ or ""
+    assert "Stage 1 predictions are excluded from Stage 2 optimization and blending" in doc
+
+
+def test_stage5_artifact_pairing_and_tabpfn_flag():
+    """Verify that Stage 5 pairs Stage 1 OOF strictly with Stage 1 submissions and defaults TabPFN to False."""
+    import inspect
+    from src.stages import stage5_meta_stacker
+    
+    src = inspect.getsource(stage5_meta_stacker.run_stage5)
+    # Ensure submission_s2_gbdt_zoo.csv is NOT in s1_sub_candidates
+    s1_sub_block = src.split("s1_sub_candidates = [")[1].split("]")[0]
+    assert "submission_s2_gbdt_zoo.csv" not in s1_sub_block
+    assert 'assert len(oof_dict["champ_anchor"]) == n_train' in src
+    assert 'assert len(test_dict["champ_anchor"]) == n_test' in src
+    
+    # Check default parameter for use_tabpfn
+    sig = inspect.signature(stage5_meta_stacker.run_stage5)
+    assert sig.parameters["use_tabpfn"].default is False
 
 
 def test_stage5_meta_features_alignment():

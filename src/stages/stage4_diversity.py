@@ -147,11 +147,9 @@ def run_stage4(
     champ_oof_p = next((p for p in champ_oof_candidates if os.path.exists(p)), None)
 
     champ_sub_candidates = [
-        os.path.join(sub_dir, "submission_s2_gbdt_zoo.csv"),
-        os.path.join("pulled", "submission_s2_gbdt_zoo.csv"),
         os.path.join(sub_dir, "submission_stage1_hillclimb.csv"),
         os.path.join("pulled", "submission_stage1_hillclimb.csv"),
-        os.path.join(sub_dir, "submission_best_0.73731.csv"),
+        os.path.join(sub_dir, "submission_baseline.csv"),
         os.path.join("pulled", "submission_baseline.csv"),
     ]
     champ_sub_p = next((p for p in champ_sub_candidates if os.path.exists(p)), None)

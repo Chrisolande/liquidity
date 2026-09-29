@@ -33,7 +33,7 @@ def run_stage5(
     ckpt_dir: str = "checkpoints",
     sub_dir: str = "submissions",
     test_path: str = None,
-    use_tabpfn: bool = True,
+    use_tabpfn: bool = False,
 ) -> float:
     """Executes upgraded Stage 5 Logit-Space L2 Meta-Stacker, Hill Climbing, and final verification."""
     print("=" * 80)
@@ -103,17 +103,17 @@ def run_stage5(
     ]
     s1_oof_path = next((p for p in s1_oof_candidates if os.path.exists(p)), None)
     s1_sub_candidates = [
-        os.path.join(sub_dir, "submission_s2_gbdt_zoo.csv"),
-        os.path.join("pulled", "submission_s2_gbdt_zoo.csv"),
         os.path.join(sub_dir, "submission_stage1_hillclimb.csv"),
         os.path.join("pulled", "submission_stage1_hillclimb.csv"),
-        os.path.join(sub_dir, "submission_best_0.73731.csv"),
+        os.path.join(sub_dir, "submission_baseline.csv"),
         os.path.join("pulled", "submission_baseline.csv"),
     ]
     s1_sub_path = next((p for p in s1_sub_candidates if os.path.exists(p)), None)
     if s1_oof_path and s1_sub_path:
         oof_dict["champ_anchor"] = np.load(s1_oof_path)
         test_dict["champ_anchor"] = pd.read_csv(s1_sub_path)["Target"].values
+        assert len(oof_dict["champ_anchor"]) == n_train, f"champ_anchor OOF length ({len(oof_dict['champ_anchor'])}) != n_train ({n_train})"
+        assert len(test_dict["champ_anchor"]) == n_test, f"champ_anchor test length ({len(test_dict['champ_anchor'])}) != n_test ({n_test})"
         print(f"Loaded Champion Anchor: {s1_oof_path}")
 
     # 2. Step 13 Benchmark Anchor (if available)
