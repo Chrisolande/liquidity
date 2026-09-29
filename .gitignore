@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+.idea/
+*.tar.gz
+*.zip
+checkpoints/
+pulled/
+submissions/

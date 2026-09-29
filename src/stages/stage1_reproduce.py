@@ -16,6 +16,8 @@ def run_stage1(
     output_dir: str = "checkpoints",
     sub_dir: str = "submissions",
     k_top_features: int = 60,
+    n_splits: int = 10,
+    seeds: tuple = (42, 100, 2024, 2026),
 ) -> float:
     """Executes Stage 1 end-to-end: Baseline Anchor + Stepwise HillClimber."""
     print("=" * 80)
@@ -23,13 +25,15 @@ def run_stage1(
     print("=" * 80, flush=True)
 
     # Step 1A: Generate Baseline Anchor
-    print("\n--- [Stage 1A] Baseline 4-Seed 3-Way Ensemble ---", flush=True)
+    print(f"\n--- [Stage 1A] Baseline {len(seeds)}-Seed Unified Family Ensemble ({n_splits}-fold CV) ---", flush=True)
     b_comp, _, _ = run_baseline(
         train_path=train_path,
         test_path=test_path,
         output_dir=output_dir,
         sub_dir=sub_dir,
         k_top_features=k_top_features,
+        n_splits=n_splits,
+        seeds=seeds,
     )
     print(f"✓ Baseline Anchor Completed: Comp={b_comp:.5f}", flush=True)
 
@@ -41,6 +45,7 @@ def run_stage1(
         output_dir=output_dir,
         sub_dir=sub_dir,
         k_top_features=k_top_features,
+        n_splits=n_splits,
     )
     print(f"★ Stage 1 Final Score after Hill Climbing: Comp={final_comp:.5f} ★\n", flush=True)
     return final_comp

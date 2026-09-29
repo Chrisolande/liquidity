@@ -46,7 +46,7 @@ def build_catboost(seed: int = SEED) -> CatBoostClassifier:
     return CatBoostClassifier(
         loss_function="Logloss",
         eval_metric="Logloss",
-        iterations=800,
+        iterations=900,
         learning_rate=0.035,
         depth=6,
         l2_leaf_reg=10.0,
@@ -151,6 +151,7 @@ def cross_validate_models(
     test_df: pd.DataFrame,
     numeric_cols: List[str],
     categorical_cols: List[str],
+    n_splits: int = 10,
     seed: int = SEED,
 ) -> Tuple[pd.DataFrame, pd.DataFrame, Dict[str, Dict[str, float]], Dict[str, List[object]]]:
     target_col = TARGET if TARGET in train_df.columns else "Target"
@@ -166,7 +167,7 @@ def cross_validate_models(
             X_test[col] = X_test[col].astype("category")
 
     cat_idx = [X.columns.get_loc(col) for col in categorical_cols if col in X.columns]
-    splitter = StratifiedKFold(n_splits=N_SPLITS, shuffle=True, random_state=seed)
+    splitter = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=seed)
 
     model_builders = {
         "catboost": lambda fold: build_catboost(seed=seed + fold),
@@ -247,16 +248,18 @@ def run_baseline(
     sub_dir: str = "submissions",
     models_dir: str = "models",
     k_top_features: int = 60,
-    seeds: Tuple[int, ...] = (42, 100, 2024, 777),
+    n_splits: int = 10,
+    seeds: Tuple[int, ...] = (42, 100, 2024, 2026),
 ) -> Tuple[float, np.ndarray, np.ndarray]:
     """
-    Executes the upgraded baseline pipeline with multi-seed averaging:
+    Executes the upgraded baseline pipeline with family-level multi-seed averaging:
     1. Full feature engineering (monthly + domain + stress + solvency + interactions)
     2. feature_engine selection (DropConstant + DropDuplicate + SmartCorrelatedSelection + CV importance)
-    3. 3-way diverse GBDT ensemble (CatBoost GPU + XGBoost GPU + HistGB) × N seeds
-    4. Per-seed SLSQP dynamic blend optimization, then raw OOF/test averaged across seeds
-    5. Non-degrading Beta/Platt calibration (replaces AUC-damaging isotonic)
-    6. Saves canonical anchor artifacts
+    3. 3-way diverse GBDT ensemble (CatBoost GPU + XGBoost GPU + HistGB) × N seeds in 10-fold CV
+    4. Per-family seed averaging to denoise model streams
+    5. Single unified constrained SLSQP simplex blend over the 3 model families
+    6. Cross-fitted Beta calibration with protective fallback gating
+    7. Saves canonical anchor artifacts
     """
     os.makedirs(output_dir, exist_ok=True)
     os.makedirs(sub_dir, exist_ok=True)
@@ -291,13 +294,14 @@ def run_baseline(
     active_nums = [c for c in selected_features if c not in active_cats]
 
     print(
-        f"Step 3: Multi-seed cross-validation — seeds={list(seeds)}, "
+        f"Step 3: Multi-seed cross-validation — {n_splits}-fold CV, seeds={list(seeds)}, "
         f"features={len(selected_features)} ({len(active_nums)} numeric + {len(active_cats)} categorical)",
         flush=True,
     )
 
-    seed_raw_oof: List[np.ndarray] = []
-    seed_raw_test: List[np.ndarray] = []
+    model_names = ["catboost", "xgboost", "hist_gb"]
+    family_oof: Dict[str, List[np.ndarray]] = {m: [] for m in model_names}
+    family_test: Dict[str, List[np.ndarray]] = {m: [] for m in model_names}
 
     for i, seed in enumerate(seeds, start=1):
         print(f"\n--- Seed {i}/{len(seeds)} : seed={seed} ---", flush=True)
@@ -306,70 +310,106 @@ def run_baseline(
             test_selected,
             active_nums,
             active_cats,
+            n_splits=n_splits,
             seed=seed,
         )
 
-        # Per-seed SLSQP blend
-        model_names = ["catboost", "xgboost", "hist_gb"]
-        optimized_weights = optimize_blend_weights(oof_preds[model_names], pd.Series(y_train))
-        weights_dict = {name: float(w) for name, w in zip(model_names, optimized_weights)}
-
-        s_oof = np.zeros(len(train_df))
-        s_test = np.zeros(len(test_df))
-        for name, w in weights_dict.items():
-            s_oof += w * oof_preds[name].to_numpy()
-            s_test += w * test_preds[name].to_numpy()
-
-        s_ll, s_auc, s_comp = competition_score(y_train, s_oof)
-        print(
-            f"  [seed={seed}] Blend OOF: Comp={s_comp:.5f} | AUC={s_auc:.5f} | LL={s_ll:.5f} | "
-            f"weights={weights_dict}",
-            flush=True,
-        )
-        seed_raw_oof.append(s_oof)
-        seed_raw_test.append(s_test)
+        for name in model_names:
+            family_oof[name].append(oof_preds[name].to_numpy())
+            family_test[name].append(test_preds[name].to_numpy())
 
         # Save per-seed models
         for model_name, models in cv_models.items():
             joblib.dump(models, os.path.join(models_dir, f"{model_name}_seed{seed}_baseline.joblib"))
 
-    # Average across seeds
-    raw_oof = np.mean(seed_raw_oof, axis=0)
-    raw_test = np.mean(seed_raw_test, axis=0)
+    # Compute family-averaged OOF and Test predictions
+    print("\n--- Model Family Averaging Across Seeds ---", flush=True)
+    mean_family_oof_dict = {}
+    mean_family_test_dict = {}
+    for name in model_names:
+        mean_family_oof_dict[name] = np.mean(family_oof[name], axis=0)
+        mean_family_test_dict[name] = np.mean(family_test[name], axis=0)
+        f_ll, f_auc, f_comp = competition_score(y_train, mean_family_oof_dict[name])
+        print(
+            f"  {name:10s} ({len(seeds)} seeds avg) | LogLoss: {f_ll:.4f} | AUC: {f_auc:.4f} | Comp: {f_comp:.4f}",
+            flush=True,
+        )
+
+    # Diagnostic: Leave-One-Out Seed Evaluation for CatBoost
+    if len(seeds) > 2:
+        print("\n--- Seed Sensitivity Check (CatBoost Leave-One-Out) ---", flush=True)
+        for idx, s in enumerate(seeds):
+            cb_without_s = np.mean([family_oof["catboost"][j] for j in range(len(seeds)) if j != idx], axis=0)
+            loo_ll, loo_auc, loo_comp = competition_score(y_train, cb_without_s)
+            print(f"  CatBoost without seed {s:4d} | LogLoss: {loo_ll:.4f} | AUC: {loo_auc:.4f} | Comp: {loo_comp:.4f}", flush=True)
+
+    mean_family_oof = pd.DataFrame(mean_family_oof_dict)
+    mean_family_test = pd.DataFrame(mean_family_test_dict)
+
+    # Step 4: One unified constrained simplex blend across the 3 family averages
+    print("\nStep 4: Unified Constrained Family Blend (SLSQP)", flush=True)
+    optimized_weights = optimize_blend_weights(mean_family_oof[model_names], pd.Series(y_train))
+    weights_dict = {name: float(w) for name, w in zip(model_names, optimized_weights)}
+    print(f"  Optimized family weights: {weights_dict}", flush=True)
+
+    raw_oof = np.zeros(len(train_df))
+    raw_test = np.zeros(len(test_df))
+    for name, w in weights_dict.items():
+        raw_oof += w * mean_family_oof[name].to_numpy()
+        raw_test += w * mean_family_test[name].to_numpy()
 
     raw_ll, raw_auc, raw_comp = competition_score(y_train, raw_oof)
-    print(f"\nStep 4: {len(seeds)}-seed averaged blend OOF: Comp={raw_comp:.5f} | AUC={raw_auc:.5f} | LL={raw_ll:.5f}", flush=True)
+    print(
+        f"  Unified Blend Raw OOF: Comp={raw_comp:.5f} | AUC={raw_auc:.5f} | LL={raw_ll:.5f}",
+        flush=True,
+    )
 
-    # Step 5: Beta calibration (strictly more expressive than Platt — superset with 3 params vs 2)
-    print("Step 5: Beta calibration", flush=True)
+    # Step 5: Beta calibration with protective fallback gating
+    print("Step 5: Cross-fitted Beta calibration", flush=True)
     calibrated_oof, calibrated_test, calibrator = beta_calibrate(raw_oof, raw_test, y_train, n_splits=5, seed=SEED)
-    best_ll, best_auc, best_comp = competition_score(y_train, calibrated_oof)
-    print(f">>> Beta Calibrated: Comp={best_comp:.5f} | AUC={best_auc:.5f} | LL={best_ll:.5f}", flush=True)
+    cal_ll, cal_auc, cal_comp = competition_score(y_train, calibrated_oof)
+    print(f"  Beta Calibrated: Comp={cal_comp:.5f} | AUC={cal_auc:.5f} | LL={cal_ll:.5f}", flush=True)
+
+    # Protect against calibration degradation
+    if cal_comp >= raw_comp:
+        final_oof = calibrated_oof
+        final_test = calibrated_test
+        selected_strategy_name = "multiseed_slsqp_family_blend_beta_calibrated"
+        best_comp, best_auc, best_ll = cal_comp, cal_auc, cal_ll
+        print("  --> Adopted Beta Calibration.", flush=True)
+    else:
+        final_oof = raw_oof
+        final_test = raw_test
+        selected_strategy_name = "multiseed_slsqp_family_blend_raw"
+        best_comp, best_auc, best_ll = raw_comp, raw_auc, raw_ll
+        print("  --> Preserved Raw Blend (Calibration did not improve composite).", flush=True)
 
     # Export canonical baseline tournament anchor artifacts
-    np.save(os.path.join(output_dir, "oof_champ_train.npy"), calibrated_oof)
+    np.save(os.path.join(output_dir, "oof_champ_train.npy"), final_oof)
     np.save(os.path.join(output_dir, "y_true.npy"), y_train)
-    np.save(os.path.join(output_dir, "oof_raw_blend.npy"), raw_oof)  # pre-calibration checkpoint
+    np.save(os.path.join(output_dir, "oof_raw_blend.npy"), raw_oof)
 
     sub_path = os.path.join(sub_dir, "submission_baseline.csv")
     sub_df = pd.DataFrame({
         ID_COL: test_fe[ID_COL],
-        "Target": np.clip(calibrated_test, FLOOR, CEIL),
+        "Target": np.clip(final_test, FLOOR, CEIL),
     })
     sub_df.to_csv(sub_path, index=False)
 
     metadata = {
         "seeds": list(seeds),
+        "n_splits": n_splits,
         "feature_count": len(selected_features),
         "numeric_features": len(active_nums),
         "categorical_features": len(active_cats),
-        "n_splits": N_SPLITS,
+        "blend_weights": weights_dict,
         "selected_strategy": {
-            "name": "multiseed_slsqp_blend_beta_calibrated",
+            "name": selected_strategy_name,
         },
         "oof_scores": {
             "raw_blend": {"comp": raw_comp, "auc": raw_auc, "ll": raw_ll},
-            "beta_calibrated": {"comp": best_comp, "auc": best_auc, "ll": best_ll},
+            "calibrated": {"comp": cal_comp, "auc": cal_auc, "ll": cal_ll},
+            "final": {"comp": best_comp, "auc": best_auc, "ll": best_ll},
         },
         "submission_path": str(sub_path),
     }
@@ -378,11 +418,11 @@ def run_baseline(
         json.dump(metadata, f, indent=2)
 
     joblib.dump(
-        {"selected_strategy": f"multiseed_slsqp_blend_{best_cal_name}_calibrated", "metadata": metadata, "calibrator": calibrator},
+        {"selected_strategy": selected_strategy_name, "metadata": metadata, "calibrator": calibrator, "weights": weights_dict},
         os.path.join(models_dir, "ensemble_baseline.joblib"),
     )
 
-    return best_comp, calibrated_oof, calibrated_test
+    return best_comp, final_oof, final_test
 
 
 if __name__ == "__main__":

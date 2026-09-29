@@ -155,6 +155,7 @@ def run_stage1_hillclimb(
     output_dir: str = "checkpoints",
     sub_dir: str = "submissions",
     k_top_features: int = 60,
+    n_splits: int = 10,
 ) -> Tuple[float, np.ndarray, np.ndarray]:
     os.makedirs(output_dir, exist_ok=True)
     os.makedirs(sub_dir, exist_ok=True)
@@ -179,7 +180,14 @@ def run_stage1_hillclimb(
     if not (os.path.exists(anchor_oof_path) and os.path.exists(anchor_sub_path)):
         print("Anchor artifacts not found on disk. Automatically running baseline first...", flush=True)
         from src.baseline import run_baseline
-        run_baseline(train_path=train_path, test_path=test_path, output_dir=output_dir, sub_dir=sub_dir, k_top_features=k_top_features)
+        run_baseline(
+            train_path=train_path,
+            test_path=test_path,
+            output_dir=output_dir,
+            sub_dir=sub_dir,
+            k_top_features=k_top_features,
+            n_splits=n_splits,
+        )
         if not os.path.exists(anchor_sub_path):
             anchor_sub_path = os.path.join(sub_dir, "submission_baseline.csv")
 
@@ -241,7 +249,7 @@ def run_stage1_hillclimb(
     candidate_oof: Dict[str, np.ndarray] = {"oof_anchor": oof_anchor}
     candidate_test: Dict[str, np.ndarray] = {"oof_anchor": test_anchor}
 
-    skf = StratifiedKFold(n_splits=N_SPLITS, shuffle=True, random_state=SEED)
+    skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=SEED)
     fold_indices = list(skf.split(X_tr_sel, y_train))
 
     for key, label, trainer in model_specs:
