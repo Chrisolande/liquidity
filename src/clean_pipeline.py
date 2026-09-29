@@ -279,7 +279,7 @@ def run_clean_pipeline(
             x_va = x_va_raw[selected_cols].copy()
             x_te = x_te_raw[[c for c in selected_cols if c in x_te_raw.columns]].copy()
 
-            print(f"\n  ┌─ [Seed {seed_val}] Fold {fold:02d}/{n_splits:02d} | Val Size: {len(val_idx):,} rows | Features Screened: {len(selected_cols)}", flush=True)
+            print(f"Seed {seed_val} | Fold {fold:02d}/{n_splits:02d} (features={len(selected_cols)}, val={len(val_idx)}):", flush=True)
             fold_val_preds = []
 
             # Train all 5 architectures on fold
@@ -308,7 +308,7 @@ def run_clean_pipeline(
 
                 m_ll, m_auc, m_comp = competition_score(y_va, val_p)
                 print(
-                    f"  │  ├─ {name:<14} (iter {best_iter:>3d}) -> Comp: {m_comp:.5f} | LogLoss: {m_ll:.5f} | AUC: {m_auc:.5f} ({time.time() - t_m:.1f}s)",
+                    f"  {name:<14} (iter {best_iter:>3d}) | Fold Comp: {m_comp:.5f} | LL: {m_ll:.5f} | AUC: {m_auc:.5f} ({time.time() - t_m:.1f}s)",
                     flush=True,
                 )
 
@@ -320,8 +320,8 @@ def run_clean_pipeline(
             cov_blend = np.mean([oof_dict[m][cov_idx] for m in model_names], axis=0)
             p_ll, p_auc, p_comp = competition_score(y_true[cov_idx], cov_blend)
 
-            print(f"  │  └─ Fold Equal-Blend: Comp = {f_comp:.5f} | LogLoss = {f_ll:.5f} | AUC = {f_auc:.5f}", flush=True)
-            print(f"  └─► Progressive Cumulative OOF ({len(cov_idx):,}/{n_train:,}): Comp = {p_comp:.5f} | AUC = {p_auc:.5f} | LL = {p_ll:.5f} [{time.time() - t_fold:.1f}s]\n", flush=True)
+            print(f"  Fold {fold:02d} Mean Blend | Comp: {f_comp:.5f} | LL: {f_ll:.5f} | AUC: {f_auc:.5f}")
+            print(f"  Running OOF ({len(cov_idx)}/{n_train}) | Comp: {p_comp:.5f} | LL: {p_ll:.5f} | AUC: {p_auc:.5f} ({time.time() - t_fold:.1f}s)\n", flush=True)
 
         # Confirm exactly one OOF prediction per row
         assert oof_covered.all(), "Critical Failure: Incomplete OOF coverage across training samples!"
@@ -424,10 +424,10 @@ def run_clean_pipeline(
 
     print("\n" + "=" * 80)
     print("LEAKAGE CHECK: PASS")
-    print("  ✓ Feature screening fitted strictly on fold training splits")
-    print("  ✓ Target encoding fitted strictly on fold training splits")
-    print("  ✓ Exactly one out-of-fold prediction per training row")
-    print("  ✓ No test-set pseudo-labeling, sharpening, or prevalence scaling")
+    print("  - Feature screening fitted strictly on fold training splits")
+    print("  - Target encoding fitted strictly on fold training splits")
+    print("  - Exactly one out-of-fold prediction per training row")
+    print("  - No test-set pseudo-labeling, sharpening, or prevalence scaling")
     print("=" * 80 + "\n", flush=True)
 
     return manifest
