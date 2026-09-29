@@ -13,8 +13,8 @@ import pandas as pd
 from scipy.optimize import minimize
 from scipy.special import softmax
 from sklearn.linear_model import LogisticRegression
-from sklearn.calibration import CalibratedClassifierCV
 from sklearn.metrics import log_loss, roc_auc_score
+from src.ensemble.calibration import beta_calibrate
 
 import lightgbm as lgb
 import xgboost as xgb
@@ -69,6 +69,8 @@ def run_catboost_multistrata(
     seeds = params.get("seeds", [42, 2026])
     val_preds_seeds = []
     test_preds_seeds = []
+    obj_cols = xtr.select_dtypes(include=['category', 'object']).columns.tolist()
+    all_cat_idx = sorted(list(set(cat_indices).union([xtr.columns.get_loc(c) for c in obj_cols if c in xtr.columns])))
     for s in seeds:
         cb = CatBoostClassifier(
             loss_function="Logloss",
@@ -88,7 +90,7 @@ def run_catboost_multistrata(
             xtr,
             ytr,
             eval_set=(xva, yva),
-            cat_features=cat_indices,
+            cat_features=all_cat_idx if all_cat_idx else None,
             early_stopping_rounds=params.get("early_stopping_rounds", 40),
             verbose=False,
         )
@@ -109,11 +111,14 @@ def run_xgboost_multistrata(
     xtr_xgb = xtr.copy()
     xva_xgb = xva.copy()
     xte_xgb = xte.copy()
-    for c in cat_cols:
+    all_cats = list(set(cat_cols).union(xtr_xgb.select_dtypes(include=['category', 'object']).columns))
+    for c in all_cats:
         if c in xtr_xgb.columns:
-            xtr_xgb[c] = xtr_xgb[c].astype("category").cat.codes
-            xva_xgb[c] = xva_xgb[c].astype("category").cat.codes
-            xte_xgb[c] = xte_xgb[c].astype("category").cat.codes
+            all_vals = pd.concat([xtr_xgb[c], xva_xgb[c], xte_xgb[c]]).astype(str).unique().tolist()
+            mapping = {v: i for i, v in enumerate(all_vals)}
+            xtr_xgb[c] = xtr_xgb[c].astype(str).map(mapping).fillna(-1).astype(int)
+            xva_xgb[c] = xva_xgb[c].astype(str).map(mapping).fillna(-1).astype(int)
+            xte_xgb[c] = xte_xgb[c].astype(str).map(mapping).fillna(-1).astype(int)
 
     seeds = params.get("seeds", [42, 2026])
     val_preds_seeds = []
@@ -136,6 +141,7 @@ def run_xgboost_multistrata(
             "reg_lambda": params.get("reg_lambda", 5.0),
             "reg_alpha": params.get("reg_alpha", 0.5),
             "seed": s,
+            "random_state": s,
         }
         bst = xgb.train(
             p,
@@ -160,7 +166,8 @@ def run_lightgbm_multistrata(
     params: dict,
     categorical_cols: List[str],
 ) -> Tuple[np.ndarray, np.ndarray]:
-    cat_cols_present = [c for c in categorical_cols if c in xtr.columns]
+    all_cats = list(set(categorical_cols).union(xtr.select_dtypes(include=['category', 'object']).columns))
+    cat_cols_present = [c for c in all_cats if c in xtr.columns]
     xtr_lgb = xtr.copy()
     xva_lgb = xva.copy()
     xte_lgb = xte.copy()
@@ -185,6 +192,12 @@ def run_lightgbm_multistrata(
             "feature_fraction": params.get("feature_fraction", 0.65),
             "bagging_fraction": params.get("bagging_fraction", 0.80),
             "bagging_freq": params.get("bagging_freq", 1),
+            "bagging_seed": s + 11,
+            "feature_fraction_seed": s + 22,
+            "extra_seed": s + 33,
+            "data_random_seed": s + 44,
+            "deterministic": True,
+            "force_col_wise": True,
             "lambda_l1": params.get("lambda_l1", 0.5),
             "lambda_l2": params.get("lambda_l2", 5.0),
             "seed": s,
@@ -225,12 +238,24 @@ def run_multistrata_pipeline(
     Y_multi = build_multilabel_stratification_matrix(train_raw)
     mskf = MultilabelStratifiedKFold(n_splits=N_SPLITS, shuffle=True, random_state=SEED)
 
-    train_fe, test_fe, numeric_cols, categorical_cols = engineer_features(train_raw, test_raw)
+    train_fe, test_fe, categorical_cols, numeric_cols = engineer_features(train_raw, test_raw)
     feature_cols = [c for c in train_fe.columns if c not in {target_col, ID_COL}]
 
-    X = train_fe[feature_cols]
+    X = train_fe[feature_cols].copy()
     y = train_fe[target_col].to_numpy(dtype=int)
-    X_test = test_fe[feature_cols]
+    X_test = test_fe[feature_cols].copy()
+
+    # Discover ALL categorical and object columns in the dataset
+    detected_cats = train_fe[feature_cols].select_dtypes(include=['category', 'object']).columns.tolist()
+    categorical_cols = list(dict.fromkeys(list(categorical_cols) + detected_cats))
+
+    # Pre-convert categoricals to clean string objects
+    clean_cat_cols = []
+    for c in categorical_cols:
+        if c in X.columns:
+            X[c] = X[c].astype(str).replace({"nan": "missing", "None": "missing"}).fillna("missing")
+            X_test[c] = X_test[c].astype(str).replace({"nan": "missing", "None": "missing"}).fillna("missing")
+            clean_cat_cols.append(c)
 
     te_targets = [c for c in ["segment", "region", "gender", "seg_earn", "reg_seg", "gen_earn"] if c in X.columns]
 
@@ -243,7 +268,7 @@ def run_multistrata_pipeline(
         fold_splits.append((trn_idx, val_idx, x_tr, y_tr, x_va, y_va, x_te))
 
     fold_feature_cols = list(fold_splits[0][2].columns)
-    cat_indices = [fold_feature_cols.index(c) for c in categorical_cols if c in fold_feature_cols]
+    cat_indices = [fold_feature_cols.index(c) for c in clean_cat_cols if c in fold_feature_cols]
 
     models_oof: Dict[str, np.ndarray] = {}
     models_test: Dict[str, np.ndarray] = {}
@@ -344,16 +369,11 @@ def run_multistrata_pipeline(
             best_nm_comp = c
             best_w = softmax(opt.x)
 
-    nm_raw_oof = np.clip(P_mat @ best_w, FLOOR, CEIL)
-    nm_raw_test = np.clip(T_mat @ best_w, FLOOR, CEIL)
+    raw_oof = np.clip(P_mat @ best_w, FLOOR, CEIL)
+    raw_test = np.clip(T_mat @ best_w, FLOOR, CEIL)
 
-    raw_oof, raw_test = nm_raw_oof, nm_raw_test
-
-    # 5-fold cross-calibrated isotonic scaling
-    calibrator = CalibratedClassifierCV(LogisticRegression(max_iter=2000, C=1.0), method="isotonic", cv=5)
-    calibrator.fit(raw_oof.reshape(-1, 1), y)
-    cal_oof = calibrator.predict_proba(raw_oof.reshape(-1, 1))[:, 1]
-    cal_test = calibrator.predict_proba(raw_test.reshape(-1, 1))[:, 1]
+    # 5-fold cross-calibrated Beta calibration (smooth, monotonic, no step-plateaus)
+    cal_oof, cal_test, _ = beta_calibrate(raw_oof, raw_test, y, n_splits=5, seed=SEED)
 
     _, _, cal_comp = competition_score(y, cal_oof)
 

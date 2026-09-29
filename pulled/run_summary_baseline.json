@@ -1,0 +1,39 @@
+{
+  "seeds": [
+    42,
+    100,
+    2024,
+    777
+  ],
+  "feature_count": 87,
+  "numeric_features": 74,
+  "categorical_features": 13,
+  "n_splits": 5,
+  "selected_strategy": {
+    "name": "multiseed_slsqp_blend_platt_calibrated"
+  },
+  "oof_scores": {
+    "raw_blend": {
+      "comp": 0.7348562369102483,
+      "auc": 0.9200600833333333,
+      "ll": 0.2312247314528926
+    },
+    "beta": {
+      "comp": 0.7349480110315028,
+      "auc": 0.9199944607843138,
+      "ll": 0.2311076918382043
+    },
+    "platt": {
+      "comp": 0.7349540222655442,
+      "auc": 0.9200102107843138,
+      "ll": 0.23110797819777987
+    },
+    "selected": {
+      "name": "platt",
+      "comp": 0.7349540222655442,
+      "auc": 0.9200102107843138,
+      "ll": 0.23110797819777987
+    }
+  },
+  "submission_path": "submissions/submission_baseline.csv"
+}

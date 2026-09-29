@@ -5,6 +5,7 @@ PyTorch Neural TabMLP Base Learner with cross-validation and GPU acceleration.
 from typing import List, Tuple
 import numpy as np
 import pandas as pd
+from scipy.special import expit
 from sklearn.preprocessing import StandardScaler
 import torch
 import torch.nn as nn
@@ -104,10 +105,10 @@ def fit_mlp_runner(
 
         model.eval()
         with torch.no_grad():
-            va_logits = model(x_val_fold).cpu().numpy()
-            te_logits = model(x_test_fold).cpu().numpy()
-            oof_mlp[val_idx] = 1.0 / (1.0 + np.exp(-va_logits))
-            test_mlp += (1.0 / (1.0 + np.exp(-te_logits))) / len(folds)
+            va_logits = model(x_val_fold).cpu().numpy().flatten()
+            te_logits = model(x_test_fold).cpu().numpy().flatten()
+            oof_mlp[val_idx] = expit(np.clip(va_logits, -20.0, 20.0))
+            test_mlp += expit(np.clip(te_logits, -20.0, 20.0)) / len(folds)
 
     ll, auc, comp = competition_score(y_train, oof_mlp)
     print(f"TabMLP 10-Fold OOF: LL={ll:.5f}, AUC={auc:.5f}, Comp={comp:.5f}", flush=True)

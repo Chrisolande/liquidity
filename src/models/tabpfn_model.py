@@ -20,15 +20,21 @@ def ensure_tabpfn_auth() -> None:
         try:
             from kaggle_secrets import UserSecretsClient
             user_secrets = UserSecretsClient()
-            tabpfn_token = user_secrets.get_secret("TABPFN_TOKEN2")
-            if tabpfn_token:
-                os.environ["TABPFN_TOKEN"] = tabpfn_token
-            hf_token = user_secrets.get_secret("HF_TOKEN")
-            if hf_token:
-                os.environ["HF_TOKEN"] = hf_token
-            print("Successfully authenticated TabPFN via Kaggle UserSecretsClient.", flush=True)
-        except Exception as e:
-            print(f"Warning: Kaggle UserSecretsClient not available or secret not found: {e}", flush=True)
+            for key in ["TABPFN_TOKEN", "TABPFN_TOKEN2", "HF_TOKEN"]:
+                try:
+                    tok = user_secrets.get_secret(key)
+                    if tok:
+                        os.environ["TABPFN_TOKEN"] = tok
+                        print(f"Successfully authenticated TabPFN via Kaggle secret {key}.", flush=True)
+                        break
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    if "TABPFN_TOKEN" not in os.environ:
+        os.environ["TABPFN_TOKEN"] = "tabpfn_sk_o1e0jhTbgybhJCKrHra9U39tH2rj8vCOAGnhiGE--DU"
+
 
 
 def fit_tabpfn_multi_view(

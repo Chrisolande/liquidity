@@ -1,6 +1,6 @@
 """
-Baseline reproduction pipeline (CatBoost + HistGradientBoosting + Isotonic Calibration).
-Generates standalone baseline model artifacts, out-of-fold predictions, and submission files.
+Baseline tournament reproduction pipeline (CatBoost GPU + XGBoost GPU + HistGB + Beta/Platt Calibration).
+Integrates feature_engine selection, 3-model diversity, dynamic SLSQP blending, and leakage-free calibration.
 """
 
 from __future__ import annotations
@@ -15,16 +15,10 @@ import joblib
 import numpy as np
 import pandas as pd
 from catboost import CatBoostClassifier
-from scipy.optimize import Bounds, minimize
-from sklearn.calibration import CalibratedClassifierCV
-from sklearn.compose import ColumnTransformer
+from xgboost import XGBClassifier
 from sklearn.ensemble import HistGradientBoostingClassifier
-from sklearn.impute import SimpleImputer
-from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import log_loss, roc_auc_score
+from scipy.optimize import Bounds, minimize
 from sklearn.model_selection import StratifiedKFold
-from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
 from src.config import (
     SEED,
@@ -34,135 +28,63 @@ from src.config import (
     FLOOR,
     CEIL,
     HAS_GPU,
+    EPS,
     get_default_dataset_paths,
 )
 from src.metrics import competition_score
-from src.features.monthly import (
-    month_columns,
-    add_monthly_summary_features,
-    add_cross_feature_ratios,
-)
-from src.features.domain import (
-    add_entropy_features,
-    add_behavioral_shift_features,
-    add_longitudinal_stress_features,
-)
+from src.features.pipeline import engineer_features
+from src.features.selection import run_feature_engine_selection
+from src.ensemble.calibration import beta_calibrate
 
 warnings.filterwarnings("ignore", category=UserWarning)
 warnings.filterwarnings("ignore", category=FutureWarning)
 warnings.filterwarnings("ignore", category=pd.errors.PerformanceWarning)
 
-FINAL_BLEND_WEIGHTS = {
-    "catboost": 0.9093763221312825,
-    "hist_gb": 0.09062367786871744,
-}
 
-
-
-
-def engineer_features(train_df: pd.DataFrame, test_df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame, List[str], List[str]]:
-    """Engineers monthly summary, cross-feature ratios, entropy, shift, and longitudinal stress features."""
-    target_col = TARGET if TARGET in train_df.columns else "Target"
-    combined = pd.concat(
-        [train_df.assign(_dataset="train"), test_df.assign(_dataset="test")],
-        axis=0,
-        ignore_index=True,
-    )
-    monthly_groups = month_columns(combined)
-    combined = add_monthly_summary_features(combined, monthly_groups)
-    combined = add_cross_feature_ratios(combined)
-    monthly_groups = month_columns(combined)
-    combined = add_entropy_features(combined)
-    monthly_groups = month_columns(combined)
-    combined = add_behavioral_shift_features(combined, monthly_groups)
-    combined = add_longitudinal_stress_features(combined)
-
-    categorical_cols = [c for c in ["gender", "region", "smartphone", "segment", "earning_pattern"] if c in combined.columns]
-    for col in categorical_cols:
-        combined[col] = combined[col].astype("category")
-
-    train_fe = combined.loc[combined["_dataset"] == "train"].drop(columns=["_dataset"]).reset_index(drop=True)
-    test_fe = combined.loc[combined["_dataset"] == "test"].drop(columns=["_dataset"]).reset_index(drop=True)
-
-    feature_cols = [c for c in train_fe.columns if c not in {target_col, ID_COL}]
-    numeric_cols = train_fe[feature_cols].select_dtypes(include=[np.number]).columns.tolist()
-    categorical_cols = [c for c in feature_cols if c not in numeric_cols]
-    return train_fe, test_fe, categorical_cols, numeric_cols
-
-
-def build_logistic_anchor(numeric_cols: List[str], categorical_cols: List[str]) -> Pipeline:
-    preprocessor = ColumnTransformer(
-        transformers=[
-            ("num", Pipeline([("imputer", SimpleImputer(strategy="median")), ("scaler", StandardScaler())]), numeric_cols),
-            (
-                "cat",
-                Pipeline(
-                    [
-                        ("imputer", SimpleImputer(strategy="most_frequent")),
-                        ("onehot", OneHotEncoder(handle_unknown="ignore")),
-                    ]
-                ),
-                categorical_cols,
-            ),
-        ]
-    )
-    return Pipeline(
-        steps=[
-            ("preprocess", preprocessor),
-            ("clf", LogisticRegression(C=0.5, max_iter=2000, solver="lbfgs")),
-        ]
-    )
-
-
-def build_hist_model(numeric_cols: List[str], categorical_cols: List[str]) -> Pipeline:
-    preprocessor = ColumnTransformer(
-        transformers=[
-            ("num", SimpleImputer(strategy="median"), numeric_cols),
-            (
-                "cat",
-                Pipeline(
-                    [
-                        ("imputer", SimpleImputer(strategy="most_frequent")),
-                        ("onehot", OneHotEncoder(handle_unknown="ignore")),
-                    ]
-                ),
-                categorical_cols,
-            ),
-        ]
-    )
-    return Pipeline(
-        steps=[
-            ("preprocess", preprocessor),
-            (
-                "clf",
-                HistGradientBoostingClassifier(
-                    learning_rate=0.04,
-                    max_depth=6,
-                    max_iter=300,
-                    min_samples_leaf=40,
-                    l2_regularization=0.2,
-                    max_leaf_nodes=31,
-                    random_state=SEED,
-                ),
-            ),
-        ]
-    )
-
-
-def build_catboost() -> CatBoostClassifier:
+def build_catboost(seed: int = SEED) -> CatBoostClassifier:
     task_type = "GPU" if HAS_GPU else "CPU"
     return CatBoostClassifier(
         loss_function="Logloss",
         eval_metric="Logloss",
-        iterations=400,
-        learning_rate=0.05,
-        depth=5,
-        l2_leaf_reg=5.0,
+        iterations=800,
+        learning_rate=0.035,
+        depth=6,
+        l2_leaf_reg=10.0,
         random_strength=0.5,
         bagging_temperature=0.0,
         task_type=task_type,
-        random_seed=SEED,
+        random_seed=seed,
         verbose=False,
+    )
+
+
+def build_xgboost(seed: int = SEED) -> XGBClassifier:
+    return XGBClassifier(
+        n_estimators=600,
+        learning_rate=0.035,
+        max_depth=5,
+        subsample=0.8,
+        colsample_bytree=0.8,
+        enable_categorical=True,
+        tree_method="hist",
+        device="cuda" if HAS_GPU else "cpu",
+        random_state=seed,
+        seed=seed,
+        eval_metric="logloss",
+    )
+
+
+def build_hist_model(cat_indices: List[int], seed: int = SEED) -> HistGradientBoostingClassifier:
+    return HistGradientBoostingClassifier(
+        learning_rate=0.035,
+        max_depth=6,
+        max_iter=350,
+        min_samples_leaf=30,
+        l2_regularization=0.5,
+        categorical_features=cat_indices,
+        random_state=seed,
+        early_stopping=True,
+        n_iter_no_change=25,
     )
 
 
@@ -182,13 +104,46 @@ def fit_fold_model(
             y_train,
             eval_set=(x_valid, y_valid),
             cat_features=cat_idx,
-            use_best_model=True,
             early_stopping_rounds=50,
+            verbose=False,
         )
+        return model
+
+    if model_name == "xgboost":
+        model.fit(
+            x_train,
+            y_train,
+            eval_set=[(x_valid, y_valid)],
+            verbose=False,
+        )
+        return model
+
+    if model_name == "hist_gb":
+        # Convert category dtypes to numeric integer codes for HistGB
+        x_tr_h = x_train.copy()
+        for col in categorical_cols:
+            if col in x_tr_h.columns:
+                x_tr_h[col] = x_tr_h[col].cat.codes.replace(-1, np.nan)
+        model.fit(x_tr_h, y_train)
         return model
 
     model.fit(x_train, y_train)
     return model
+
+
+def predict_model_probs(
+    model_name: str,
+    model: object,
+    X: pd.DataFrame,
+    categorical_cols: List[str],
+) -> np.ndarray:
+    if model_name == "hist_gb":
+        X_h = X.copy()
+        for col in categorical_cols:
+            if col in X_h.columns:
+                X_h[col] = X_h[col].cat.codes.replace(-1, np.nan)
+        return np.clip(model.predict_proba(X_h)[:, 1], FLOOR, CEIL)
+    return np.clip(model.predict_proba(X)[:, 1], FLOOR, CEIL)
 
 
 def cross_validate_models(
@@ -196,18 +151,27 @@ def cross_validate_models(
     test_df: pd.DataFrame,
     numeric_cols: List[str],
     categorical_cols: List[str],
+    seed: int = SEED,
 ) -> Tuple[pd.DataFrame, pd.DataFrame, Dict[str, Dict[str, float]], Dict[str, List[object]]]:
     target_col = TARGET if TARGET in train_df.columns else "Target"
     feature_cols = [c for c in train_df.columns if c not in {target_col, ID_COL}]
-    X = train_df[feature_cols]
+    X = train_df[feature_cols].copy()
     y = train_df[target_col]
-    X_test = test_df[feature_cols]
+    X_test = test_df[feature_cols].copy()
 
-    splitter = StratifiedKFold(n_splits=N_SPLITS, shuffle=True, random_state=SEED)
+    # Ensure category dtype for tree models
+    for col in categorical_cols:
+        if col in X.columns:
+            X[col] = X[col].astype("category")
+            X_test[col] = X_test[col].astype("category")
+
+    cat_idx = [X.columns.get_loc(col) for col in categorical_cols if col in X.columns]
+    splitter = StratifiedKFold(n_splits=N_SPLITS, shuffle=True, random_state=seed)
+
     model_builders = {
-        "catboost": lambda: build_catboost(),
-        "hist_gb": lambda: build_hist_model(numeric_cols, categorical_cols),
-        "logistic_anchor": lambda: build_logistic_anchor(numeric_cols, categorical_cols),
+        "catboost": lambda fold: build_catboost(seed=seed + fold),
+        "xgboost": lambda fold: build_xgboost(seed=seed + fold),
+        "hist_gb": lambda fold: build_hist_model(cat_indices=cat_idx, seed=seed + fold),
     }
 
     oof = pd.DataFrame(index=train_df.index)
@@ -216,7 +180,7 @@ def cross_validate_models(
     saved_models: Dict[str, List[object]] = {}
 
     for model_name, builder in model_builders.items():
-        print(f"Training baseline model: {model_name}", flush=True)
+        print(f"  [seed={seed}] Training model: {model_name}", flush=True)
         model_oof = np.zeros(len(train_df))
         fold_test_preds = []
         saved_models[model_name] = []
@@ -226,22 +190,22 @@ def cross_validate_models(
             x_train, x_valid = X.iloc[train_idx].copy(), X.iloc[valid_idx].copy()
             y_train, y_valid = y.iloc[train_idx], y.iloc[valid_idx]
 
-            model = builder()
+            model = builder(fold)
             model = fit_fold_model(model_name, model, x_train, y_train, x_valid, y_valid, categorical_cols)
 
-            val_pred = np.clip(model.predict_proba(x_valid)[:, 1], 1e-5, 1.0 - 1e-5)
-            test_pred = np.clip(model.predict_proba(X_test)[:, 1], 1e-5, 1.0 - 1e-5)
+            val_pred = predict_model_probs(model_name, model, x_valid, categorical_cols)
+            test_pred = predict_model_probs(model_name, model, X_test, categorical_cols)
 
             model_oof[valid_idx] = val_pred
             fold_test_preds.append(test_pred)
             ll, auc, comp = competition_score(y_valid.to_numpy(), val_pred)
-            print(f"  Fold {fold} | LogLoss: {ll:.4f} | AUC: {auc:.4f} | Comp: {comp:.4f}", flush=True)
+            print(f"    Fold {fold} | LogLoss: {ll:.4f} | AUC: {auc:.4f} | Comp: {comp:.4f}", flush=True)
             fold_scores.append(comp)
             saved_models[model_name].append(model)
 
         ll, auc, comp = competition_score(y.to_numpy(), model_oof)
         print(
-            f"{model_name} OOF | LogLoss: {ll:.4f} | AUC: {auc:.4f} | Comp: {comp:.4f} | "
+            f"  {model_name} OOF | LogLoss: {ll:.4f} | AUC: {auc:.4f} | Comp: {comp:.4f} | "
             f"CV mean+-std: {np.mean(fold_scores):.4f} +- {np.std(fold_scores):.4f}",
             flush=True,
         )
@@ -257,7 +221,8 @@ def cross_validate_models(
 
 
 def optimize_blend_weights(oof_preds: pd.DataFrame, y_true: pd.Series) -> np.ndarray:
-    initial = np.full(oof_preds.shape[1], 1.0 / oof_preds.shape[1])
+    n_models = oof_preds.shape[1]
+    initial = np.full(n_models, 1.0 / n_models)
 
     def objective(weights: np.ndarray) -> float:
         weights = np.clip(weights, 0, 1)
@@ -275,44 +240,23 @@ def optimize_blend_weights(oof_preds: pd.DataFrame, y_true: pd.Series) -> np.nda
     return weights
 
 
-def isotonic_calibrate(
-    oof_blend: np.ndarray,
-    y_true: pd.Series,
-    test_blend: np.ndarray,
-) -> Tuple[np.ndarray, np.ndarray, Dict[str, float], object]:
-    sigmoid_calibrator = CalibratedClassifierCV(LogisticRegression(max_iter=2000), method="sigmoid", cv=5)
-    isotonic_calibrator = CalibratedClassifierCV(LogisticRegression(max_iter=2000), method="isotonic", cv=5)
-
-    raw_feature = oof_blend.reshape(-1, 1)
-    test_feature = test_blend.reshape(-1, 1)
-
-    sigmoid_calibrator.fit(raw_feature, y_true)
-    sigmoid_oof = sigmoid_calibrator.predict_proba(raw_feature)[:, 1]
-    _, _, sigmoid_score = competition_score(y_true.to_numpy(), sigmoid_oof)
-
-    isotonic_calibrator.fit(raw_feature, y_true)
-    isotonic_oof = isotonic_calibrator.predict_proba(raw_feature)[:, 1]
-    isotonic_test = isotonic_calibrator.predict_proba(test_feature)[:, 1]
-    _, _, isotonic_score = competition_score(y_true.to_numpy(), isotonic_oof)
-
-    metrics = {
-        "sigmoid": sigmoid_score,
-        "isotonic": isotonic_score,
-    }
-    return isotonic_oof, isotonic_test, metrics, isotonic_calibrator
-
-
 def run_baseline(
     train_path: str = None,
     test_path: str = None,
     output_dir: str = "checkpoints",
     sub_dir: str = "submissions",
     models_dir: str = "models",
+    k_top_features: int = 60,
+    seeds: Tuple[int, ...] = (42, 100, 2024, 777),
 ) -> Tuple[float, np.ndarray, np.ndarray]:
     """
-    Executes the self-contained baseline pipeline:
-    Fits CatBoost + HistGB, blends weights, calibrates via isotonic regression,
-    and saves checkpoints/oof_champ_train.npy & submissions/submission_best_0.73731.csv.
+    Executes the upgraded baseline pipeline with multi-seed averaging:
+    1. Full feature engineering (monthly + domain + stress + solvency + interactions)
+    2. feature_engine selection (DropConstant + DropDuplicate + SmartCorrelatedSelection + CV importance)
+    3. 3-way diverse GBDT ensemble (CatBoost GPU + XGBoost GPU + HistGB) × N seeds
+    4. Per-seed SLSQP dynamic blend optimization, then raw OOF/test averaged across seeds
+    5. Non-degrading Beta/Platt calibration (replaces AUC-damaging isotonic)
+    6. Saves canonical anchor artifacts
     """
     os.makedirs(output_dir, exist_ok=True)
     os.makedirs(sub_dir, exist_ok=True)
@@ -325,62 +269,108 @@ def run_baseline(
     test_df = pd.read_csv(test_path)
     target_col = TARGET if TARGET in train_df.columns else "Target"
 
-    print("Engineering baseline features", flush=True)
+    print("Step 1: Engineering comprehensive feature set", flush=True)
     train_fe, test_fe, categorical_cols, numeric_cols = engineer_features(train_df, test_df)
 
-    oof_preds, test_preds, model_scores, cv_models = cross_validate_models(
-        train_fe,
-        test_fe,
-        numeric_cols,
-        categorical_cols,
+    y_train = train_fe[target_col].to_numpy(int)
+    X_tr_raw = train_fe.drop(columns=[target_col, ID_COL])
+    X_te_raw = test_fe.drop(columns=[c for c in [ID_COL] if c in test_fe.columns])
+
+    print(f"Step 2: Running feature_engine selection (targeting ~{k_top_features} features)", flush=True)
+    X_tr_sel, X_te_sel, selected_features = run_feature_engine_selection(
+        X_tr_raw, y_train, X_te_raw, cat_cols=categorical_cols, k_top=k_top_features, corr_threshold=0.98, seed=SEED
     )
 
-    optimized_weights = optimize_blend_weights(oof_preds[["catboost", "hist_gb"]], train_fe[target_col])
-    w_cb = optimized_weights.get("catboost", FINAL_BLEND_WEIGHTS["catboost"])
-    w_hgb = optimized_weights.get("hist_gb", FINAL_BLEND_WEIGHTS["hist_gb"])
-    w_sum = w_cb + w_hgb + 1e-9
-    w_cb, w_hgb = w_cb / w_sum, w_hgb / w_sum
-    print(f"Dynamic baseline blend weights: catboost={w_cb:.4f}, hist_gb={w_hgb:.4f}")
+    # Reconstruct dataframes for cross_validate_models
+    train_selected = X_tr_sel.copy()
+    train_selected[target_col] = y_train
+    test_selected = X_te_sel.copy()
+    test_selected[ID_COL] = test_fe[ID_COL].values
 
-    blend_oof = w_cb * oof_preds["catboost"].to_numpy() + w_hgb * oof_preds["hist_gb"].to_numpy()
-    blend_test = w_cb * test_preds["catboost"].to_numpy() + w_hgb * test_preds["hist_gb"].to_numpy()
+    active_cats = [c for c in categorical_cols if c in selected_features]
+    active_nums = [c for c in selected_features if c not in active_cats]
 
-    calibrated_oof, calibrated_test, calibration_metrics, calibrator = isotonic_calibrate(
-        blend_oof,
-        train_fe[target_col],
-        blend_test,
+    print(
+        f"Step 3: Multi-seed cross-validation — seeds={list(seeds)}, "
+        f"features={len(selected_features)} ({len(active_nums)} numeric + {len(active_cats)} categorical)",
+        flush=True,
     )
-    ll, auc, comp = competition_score(train_fe[target_col].to_numpy(), calibrated_oof)
-    print(f"Baseline OOF: Comp: {comp:.5f} | AUC: {auc:.5f} | LL: {ll:.5f}", flush=True)
+
+    seed_raw_oof: List[np.ndarray] = []
+    seed_raw_test: List[np.ndarray] = []
+
+    for i, seed in enumerate(seeds, start=1):
+        print(f"\n--- Seed {i}/{len(seeds)} : seed={seed} ---", flush=True)
+        oof_preds, test_preds, model_scores, cv_models = cross_validate_models(
+            train_selected,
+            test_selected,
+            active_nums,
+            active_cats,
+            seed=seed,
+        )
+
+        # Per-seed SLSQP blend
+        model_names = ["catboost", "xgboost", "hist_gb"]
+        optimized_weights = optimize_blend_weights(oof_preds[model_names], pd.Series(y_train))
+        weights_dict = {name: float(w) for name, w in zip(model_names, optimized_weights)}
+
+        s_oof = np.zeros(len(train_df))
+        s_test = np.zeros(len(test_df))
+        for name, w in weights_dict.items():
+            s_oof += w * oof_preds[name].to_numpy()
+            s_test += w * test_preds[name].to_numpy()
+
+        s_ll, s_auc, s_comp = competition_score(y_train, s_oof)
+        print(
+            f"  [seed={seed}] Blend OOF: Comp={s_comp:.5f} | AUC={s_auc:.5f} | LL={s_ll:.5f} | "
+            f"weights={weights_dict}",
+            flush=True,
+        )
+        seed_raw_oof.append(s_oof)
+        seed_raw_test.append(s_test)
+
+        # Save per-seed models
+        for model_name, models in cv_models.items():
+            joblib.dump(models, os.path.join(models_dir, f"{model_name}_seed{seed}_baseline.joblib"))
+
+    # Average across seeds
+    raw_oof = np.mean(seed_raw_oof, axis=0)
+    raw_test = np.mean(seed_raw_test, axis=0)
+
+    raw_ll, raw_auc, raw_comp = competition_score(y_train, raw_oof)
+    print(f"\nStep 4: {len(seeds)}-seed averaged blend OOF: Comp={raw_comp:.5f} | AUC={raw_auc:.5f} | LL={raw_ll:.5f}", flush=True)
+
+    # Step 5: Beta calibration (strictly more expressive than Platt — superset with 3 params vs 2)
+    print("Step 5: Beta calibration", flush=True)
+    calibrated_oof, calibrated_test, calibrator = beta_calibrate(raw_oof, raw_test, y_train, n_splits=5, seed=SEED)
+    best_ll, best_auc, best_comp = competition_score(y_train, calibrated_oof)
+    print(f">>> Beta Calibrated: Comp={best_comp:.5f} | AUC={best_auc:.5f} | LL={best_ll:.5f}", flush=True)
 
     # Export canonical baseline tournament anchor artifacts
     np.save(os.path.join(output_dir, "oof_champ_train.npy"), calibrated_oof)
-    np.save(os.path.join(output_dir, "y_true.npy"), train_fe[target_col].to_numpy())
+    np.save(os.path.join(output_dir, "y_true.npy"), y_train)
+    np.save(os.path.join(output_dir, "oof_raw_blend.npy"), raw_oof)  # pre-calibration checkpoint
 
-    sub_path = os.path.join(sub_dir, "submission_best_0.73731.csv")
+    sub_path = os.path.join(sub_dir, "submission_baseline.csv")
     sub_df = pd.DataFrame({
         ID_COL: test_fe[ID_COL],
         "Target": np.clip(calibrated_test, FLOOR, CEIL),
     })
     sub_df.to_csv(sub_path, index=False)
-    sub_df.to_csv(os.path.join(sub_dir, "submission_baseline.csv"), index=False)
 
     metadata = {
-        "feature_count": len([c for c in train_fe.columns if c not in {target_col, ID_COL}]),
-        "numeric_features": len(numeric_cols),
-        "categorical_features": len(categorical_cols),
+        "seeds": list(seeds),
+        "feature_count": len(selected_features),
+        "numeric_features": len(active_nums),
+        "categorical_features": len(active_cats),
         "n_splits": N_SPLITS,
-        "model_scores": model_scores,
         "selected_strategy": {
-            "name": "weighted_top2_calibrated",
-            "weights": FINAL_BLEND_WEIGHTS,
-            "optimized_weights": {
-                "catboost": float(optimized_weights[0]),
-                "hist_gb": float(optimized_weights[1]),
-            },
+            "name": "multiseed_slsqp_blend_beta_calibrated",
         },
-        "selected_oof": {"logloss": ll, "auc": auc, "competition_score": comp},
-        "calibration_candidates": calibration_metrics,
+        "oof_scores": {
+            "raw_blend": {"comp": raw_comp, "auc": raw_auc, "ll": raw_ll},
+            "beta_calibrated": {"comp": best_comp, "auc": best_auc, "ll": best_ll},
+        },
         "submission_path": str(sub_path),
     }
 
@@ -388,14 +378,13 @@ def run_baseline(
         json.dump(metadata, f, indent=2)
 
     joblib.dump(
-        {"selected_strategy": "weighted_top2_calibrated", "metadata": metadata, "calibrator": calibrator},
+        {"selected_strategy": f"multiseed_slsqp_blend_{best_cal_name}_calibrated", "metadata": metadata, "calibrator": calibrator},
         os.path.join(models_dir, "ensemble_baseline.joblib"),
     )
-    for model_name, models in cv_models.items():
-        joblib.dump(models, os.path.join(models_dir, f"{model_name}_cv_baseline.joblib"))
 
-    return comp, calibrated_oof, calibrated_test
+    return best_comp, calibrated_oof, calibrated_test
 
 
 if __name__ == "__main__":
     run_baseline()
+

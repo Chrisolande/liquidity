@@ -37,6 +37,30 @@ def comp_metric_eval(y_true: np.ndarray, y_pred: np.ndarray) -> float:
     return comp
 
 
+def print_metric_banner(
+    stage_name: str,
+    y_true: np.ndarray,
+    y_pred: np.ndarray,
+    baseline_comp: Optional[float] = None,
+) -> Tuple[float, float, float]:
+    """
+    Standardized, unbuffered metric report banner formatted for real-time streaming
+    and instant visibility via /tasks and live execution logs.
+    """
+    ll, auc, comp = competition_score(y_true, y_pred)
+    delta_str = f" | Delta vs Baseline: {comp - baseline_comp:+.5f}" if baseline_comp is not None else ""
+    banner = (
+        "\n" + "=" * 70 + "\n"
+        f"[METRICS REPORT] {stage_name}\n"
+        f"  Composite Score : {comp:.5f}{delta_str}\n"
+        f"  ROC-AUC         : {auc:.5f}\n"
+        f"  LogLoss         : {ll:.5f} (Norm LL: {ll/0.595:.4f})\n"
+        "=" * 70 + "\n"
+    )
+    print(banner, flush=True)
+    return ll, auc, comp
+
+
 def paired_bootstrap(
     y_true: np.ndarray,
     p_new: np.ndarray,

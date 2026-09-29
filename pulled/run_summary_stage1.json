@@ -1,0 +1,15 @@
+{
+  "stage": "stage1_hillclimb",
+  "previous_anchor_comp": 0.7349540222655442,
+  "final_comp": 0.7352237502438628,
+  "final_auc": 0.9201275539215685,
+  "final_logloss": 0.23088704406372498,
+  "strategy": "hillclimb_raw_blend",
+  "candidates": [
+    "oof_anchor",
+    "cb_tuned_d7_ms",
+    "lgb_leaf_wise",
+    "lgb_extra_trees"
+  ],
+  "submission_path": "submissions/submission_stage1_hillclimb.csv"
+}

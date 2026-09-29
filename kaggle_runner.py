@@ -67,27 +67,46 @@ class SimpleWebSocket:
             header = struct.pack("!BBQ", 0x81, 0x80 | 127, length)
         self.sock.sendall(header + mask_key + masked_data)
 
+    def _recv_exact(self, n):
+        buf = b""
+        while len(buf) < n:
+            try:
+                chunk = self.sock.recv(n - len(buf))
+                if not chunk:
+                    return None
+                buf += chunk
+            except (socket.timeout, TimeoutError):
+                if not buf:
+                    return b""
+                continue
+        return buf
+
     def recv(self):
         try:
-            head = self.sock.recv(2)
-            if not head or len(head) < 2:
+            head = self._recv_exact(2)
+            if head is None:
                 return None
+            if not head:
+                return ""
             b1, b2 = struct.unpack("!BB", head)
             opcode = b1 & 0x0F
             has_mask = bool(b2 & 0x80)
             length = b2 & 0x7F
             if length == 126:
-                length = struct.unpack("!H", self.sock.recv(2))[0]
+                ext = self._recv_exact(2)
+                if not ext or len(ext) < 2:
+                    return None
+                length = struct.unpack("!H", ext)[0]
             elif length == 127:
-                length = struct.unpack("!Q", self.sock.recv(8))[0]
-            mask_key = self.sock.recv(4) if has_mask else None
-            data = b""
-            while len(data) < length:
-                chunk = self.sock.recv(min(length - len(data), 65536))
-                if not chunk:
-                    break
-                data += chunk
-            if has_mask:
+                ext = self._recv_exact(8)
+                if not ext or len(ext) < 8:
+                    return None
+                length = struct.unpack("!Q", ext)[0]
+            mask_key = self._recv_exact(4) if has_mask else None
+            data = self._recv_exact(length) if length > 0 else b""
+            if data is None:
+                return None
+            if has_mask and mask_key:
                 data = bytes(b ^ mask_key[i % 4] for i, b in enumerate(data))
             if opcode == 0x1:
                 return data.decode("utf-8", errors="replace")
@@ -220,13 +239,17 @@ def execute_code(code: str, timeout: float = 1800.0, print_stream: bool = True, 
                 if print_stream:
                     sys.stdout.write(res_text)
                     sys.stdout.flush()
-            elif msg_type == "status" and msg["content"].get("execution_state") == "idle":
+            elif msg_type == "status" and msg["content"].get("execution_state") == "idle" and parent_id == msg_id:
                 break
         except (socket.timeout, TimeoutError):
             continue
 
         except Exception as e:
-            output_chunks.append(f"\n[WebSocket Error: {e}]\n")
+            err_msg = f"\n[WebSocket Error: {e}]\n"
+            output_chunks.append(err_msg)
+            if print_stream:
+                sys.stderr.write(err_msg)
+                sys.stderr.flush()
             break
             
     try:

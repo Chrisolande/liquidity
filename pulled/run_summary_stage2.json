@@ -1,0 +1,24 @@
+{
+  "stage": "stage2_domain_gbdt_zoo",
+  "previous_anchor_comp": 0.7352237502438628,
+  "final_comp": 0.7352802671666365,
+  "final_auc": 0.920177593137255,
+  "final_logloss": 0.23085084700419653,
+  "weights": {
+    "cb_d7_dom26": 0.0841974046544975,
+    "cb_d6_dom35": 0.0,
+    "xgb_d4_dom35": 5.662886321803536e-19,
+    "xgb_d4_triage": 5.055572112504447e-18,
+    "lgb_extra": 0.023829479361534567,
+    "oof_anchor": 0.891972115984968
+  },
+  "strategy": "raw_zoo_blend",
+  "zoo_models": [
+    "cb_d7_dom26",
+    "cb_d6_dom35",
+    "xgb_d4_dom35",
+    "xgb_d4_triage",
+    "lgb_extra"
+  ],
+  "submission_path": "submissions/submission_s2_gbdt_zoo.csv"
+}

@@ -134,6 +134,13 @@ def screen_features(
         min_child_samples=100,
         importance_type="gain",
         random_state=seed,
+        seed=seed,
+        bagging_seed=seed + 11,
+        feature_fraction_seed=seed + 22,
+        extra_seed=seed + 33,
+        data_random_seed=seed + 44,
+        deterministic=True,
+        force_col_wise=True,
         verbose=-1,
     )
     m = lgb.LGBMClassifier(n_jobs=-1, **p_screener)

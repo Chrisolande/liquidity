@@ -153,15 +153,27 @@ seed_everything(SEED)
 
 def get_default_dataset_paths() -> Tuple[str, str]:
     base_dirs = [
+        Path("/kaggle/input/datasets/chrisolande2/zindi-competition"),
         Path("/kaggle/input/datasets/chrisolande/zindi-competition"),
         Path("/kaggle/input/chrisolande/zindi-competition"),
+        Path("/kaggle/input/ai4eac-liquidity-stress"),
         Path("chrisolande/zindi-competition"),
         Path("."),
+        Path("data"),
     ]
     for b in base_dirs:
         tr = b / "Train.csv"
         te = b / "Test.csv"
         if tr.exists() and te.exists():
             return str(tr), str(te)
-    default_dir = Path("/kaggle/input/datasets/chrisolande/zindi-competition")
+
+    # Dynamic fallback scan under /kaggle/input
+    if Path("/kaggle/input").exists():
+        tr_candidates = [p for p in Path("/kaggle/input").rglob("Train.csv") if p.is_file() and p.stat().st_size > 1000]
+        te_candidates = [p for p in Path("/kaggle/input").rglob("Test.csv") if p.is_file() and p.stat().st_size > 1000]
+        if tr_candidates and te_candidates:
+            return str(tr_candidates[0]), str(te_candidates[0])
+
+    default_dir = Path("/kaggle/input/datasets/chrisolande2/zindi-competition")
     return str(default_dir / "Train.csv"), str(default_dir / "Test.csv")
+

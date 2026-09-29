@@ -50,45 +50,47 @@ def main():
 
     try:
         # Stage 1: Baseline Reproduction (CatBoost + HistGB + Isotonic) on full 40k
-        print("\n" + "#" * 40)
+        print("\n" + "#" * 60)
         print("STAGE 1: Baseline Tournament Anchor (40k Train / 30k Test)")
-        print("#" * 40, flush=True)
+        print("#" * 60, flush=True)
         if os.path.exists("checkpoints/oof_champ_train.npy") and os.path.exists("checkpoints/y_true.npy"):
-            print("--> STAGE 1 Checkpoint already verified (oof_champ_train.npy & y_true.npy present). Score: 0.73392. Proceeding to Stage 2.\n", flush=True)
+            print("--> STAGE 1 Checkpoint already verified (oof_champ_train.npy & y_true.npy present). Baseline: 0.73392. Proceeding to Stage 2.\n", flush=True)
         else:
             s1_score = run_stage1()
-            print(f"--> STAGE 1 FINISHED with Score: {s1_score:.5f}\n", flush=True)
+            print(f"\n[LIVE /tasks METRICS] STAGE 1 REPRODUCTION SCORE: {s1_score:.5f}\n", flush=True)
 
         # Stage 2: 4-Seed Multi-Model Domain GBDT Zoo
-        print("\n" + "#" * 40)
+        print("\n" + "#" * 60)
         print("STAGE 2: Multi-Model GBDT Zoo (CatBoost + XGBoost + LightGBM + Platt, 4 Seeds)")
-        print("#" * 40, flush=True)
+        print("#" * 60, flush=True)
         s2_score = run_stage2(seeds=(42, 100, 2024, 777), n_splits=5)
-        print(f"--> STAGE 2 FINISHED with Score: {s2_score:.5f}\n", flush=True)
+        print(f"\n[LIVE /tasks METRICS] STAGE 2 GBDT ZOO SCORE: {s2_score:.5f}\n", flush=True)
 
         # Stage 3: Genuine TabPFN Foundation Priors on GPU
-        print("\n" + "#" * 40)
+        print("\n" + "#" * 60)
         print("STAGE 3: Genuine TabPFN Foundation Priors (GPU)")
-        print("#" * 40, flush=True)
+        print("#" * 60, flush=True)
         s3_score = run_stage3(n_splits=5)
-        print(f"--> STAGE 3 FINISHED with Score: {s3_score:.5f}\n", flush=True)
+        print(f"\n[LIVE /tasks METRICS] STAGE 3 TABPFN SCORE: {s3_score:.5f}\n", flush=True)
 
-        # Stage 4: MultiStrata Iterative Stratification Ensemble (with Pseudo-Labels)
-        print("\n" + "#" * 40)
-        print("STAGE 4: MultiStrata Iterative Stratification Ensemble")
-        print("#" * 40, flush=True)
-        from src.models.multistrata import run_multistrata_pipeline
-        s4_score = run_multistrata_pipeline()
-        print(f"--> STAGE 4 FINISHED with MultiStrata Score: {s4_score:.5f}\n", flush=True)
+        # Stage 4: Diversity Pipeline (MultiStrata, Distillation Students, Neural TabMLP)
+        print("\n" + "#" * 60)
+        print("STAGE 4: Diversity Base Learners Pipeline")
+        print("#" * 60, flush=True)
+        from src.stages.stage4_diversity import run_stage4
+        s4_score = run_stage4()
+        print(f"\n[LIVE /tasks METRICS] STAGE 4 DIVERSITY SCORE: {s4_score:.5f}\n", flush=True)
 
         # Stage 5: Multi-Stage Meta-Stacker & Hill-Climbing
-        print("\n" + "#" * 40)
-        print("STAGE 5: Meta-Stacker, Hill-Climbing & Platt Calibration")
-        print("#" * 40, flush=True)
+        print("\n" + "#" * 60)
+        print("STAGE 5: Meta-Stacker, Logit-Space Regularization & Hill-Climbing")
+        print("#" * 60, flush=True)
         s5_score = run_stage5()
-        print(f"--> STAGE 5 FINISHED with Final Composite Score: {s5_score:.5f}\n", flush=True)
+        print(f"\n[LIVE /tasks METRICS] FINAL META-STACKER COMPOSITE SCORE: {s5_score:.5f}\n", flush=True)
         import shutil
-        sub_src = "submissions/submission_step13_4seed_0.73737.csv"
+        sub_src = f"submissions/submission_champion_{s5_score:.5f}.csv"
+        if not os.path.exists(sub_src):
+            sub_src = "submissions/submission_stage5_final.csv"
         if os.path.exists(sub_src):
             shutil.copy(sub_src, "submission_final_e2e.csv")
             print(f"Copied final submission to /kaggle/working/submission_final_e2e.csv ({os.path.getsize('submission_final_e2e.csv'):,} bytes)", flush=True)

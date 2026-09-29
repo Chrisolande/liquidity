@@ -17,9 +17,11 @@ def run_audit(sub_candidates: Optional[List[str]] = None) -> bool:
 
     if not sub_candidates:
         sub_candidates = [
+            "submissions/submission_stage5_final.csv",
+            "submissions/submission_s2_gbdt_zoo.csv",
+            "submissions/submission_stage1_hillclimb.csv",
             "submissions/submission_step13_4seed_0.73737.csv",
             "submissions/submission_step13_4seed_0.73732.csv",
-            "submissions/submission_s2_gbdt_zoo_0.73733.csv",
             "submissions/submission_best_0.73731.csv",
             "submissions/submission.csv",
         ]

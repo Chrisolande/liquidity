@@ -95,6 +95,12 @@ def fit_gbdt_runner(
             elif cls_name in ["LGBMClassifier", "LGBMRegressor"]:
                 p["random_state"] = s
                 p["seed"] = s
+                p.setdefault("bagging_seed", s + 11)
+                p.setdefault("feature_fraction_seed", s + 22)
+                p.setdefault("extra_seed", s + 33)
+                p.setdefault("data_random_seed", s + 44)
+                p.setdefault("deterministic", True)
+                p.setdefault("force_col_wise", True)
                 p["verbose"] = -1
                 p["n_jobs"] = -1
                 m = model_cls(**p)
@@ -260,7 +266,20 @@ def run_pseudo_student(
         x_tr, x_va, x_te = apply_fold_target_encoding(x_tr, y_tr, x_va, x_te, cat_cols, seed=SEED + fold)
 
         if model_type == "lgb":
-            m = lgb.LGBMClassifier(n_estimators=600, learning_rate=0.03, random_state=SEED + fold, verbose=-1, n_jobs=-1)
+            m = lgb.LGBMClassifier(
+                n_estimators=600,
+                learning_rate=0.03,
+                random_state=SEED + fold,
+                seed=SEED + fold,
+                bagging_seed=SEED + fold + 11,
+                feature_fraction_seed=SEED + fold + 22,
+                extra_seed=SEED + fold + 33,
+                data_random_seed=SEED + fold + 44,
+                deterministic=True,
+                force_col_wise=True,
+                verbose=-1,
+                n_jobs=-1,
+            )
         else:
             m = CatBoostClassifier(iterations=600, learning_rate=0.03, random_seed=SEED + fold, verbose=0)
             if HAS_GPU:

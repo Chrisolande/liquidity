@@ -69,8 +69,16 @@ def train_distillation_students(
             max_depth=5,
             num_leaves=31,
             subsample=0.8,
+            subsample_freq=1,
             colsample_bytree=0.8,
             random_state=seed + fold,
+            seed=seed + fold,
+            bagging_seed=seed + fold + 11,
+            feature_fraction_seed=seed + fold + 22,
+            extra_seed=seed + fold + 33,
+            data_random_seed=seed + fold + 44,
+            deterministic=True,
+            force_col_wise=True,
             verbose=-1,
             n_jobs=-1,
         )
@@ -91,6 +99,7 @@ def train_distillation_students(
             reg_lambda=1.0,
             reg_alpha=0.1,
             random_state=seed + fold,
+            seed=seed + fold,
             tree_method="hist",
             device="cuda" if HAS_GPU else "cpu",
             n_jobs=-1,
@@ -129,6 +138,8 @@ def run_pseudo_student(
 
     if model_type == "catboost":
         task_type = "GPU" if HAS_GPU else "CPU"
+        obj_cols = X_aug.select_dtypes(include=['category', 'object']).columns.tolist()
+        all_cat_idx = sorted(list(set(cat_indices).union([X_aug.columns.get_loc(c) for c in obj_cols if c in X_aug.columns])))
         cb = CatBoostClassifier(
             loss_function="CrossEntropy",
             eval_metric="CrossEntropy",
@@ -148,7 +159,7 @@ def run_pseudo_student(
             y_aug,
             sample_weight=weights,
             eval_set=(xva, yva),
-            cat_features=cat_indices,
+            cat_features=all_cat_idx if all_cat_idx else None,
             early_stopping_rounds=40,
             verbose=False,
         )
@@ -160,11 +171,14 @@ def run_pseudo_student(
         X_aug_xgb = X_aug.copy()
         xva_xgb = xva.copy()
         xte_xgb = xte.copy()
-        for c in cat_cols:
+        all_cats = list(set(cat_cols).union(X_aug_xgb.select_dtypes(include=['category', 'object']).columns))
+        for c in all_cats:
             if c in X_aug_xgb.columns:
-                X_aug_xgb[c] = X_aug_xgb[c].astype("category").cat.codes
-                xva_xgb[c] = xva_xgb[c].astype("category").cat.codes
-                xte_xgb[c] = xte_xgb[c].astype("category").cat.codes
+                all_vals = pd.concat([X_aug_xgb[c], xva_xgb[c], xte_xgb[c]]).astype(str).unique().tolist()
+                mapping = {v: i for i, v in enumerate(all_vals)}
+                X_aug_xgb[c] = X_aug_xgb[c].astype(str).map(mapping).fillna(-1).astype(int)
+                xva_xgb[c] = xva_xgb[c].astype(str).map(mapping).fillna(-1).astype(int)
+                xte_xgb[c] = xte_xgb[c].astype(str).map(mapping).fillna(-1).astype(int)
 
         dtrain = xgb.DMatrix(X_aug_xgb, label=y_aug, weight=weights, enable_categorical=True)
         dval = xgb.DMatrix(xva_xgb, label=yva, enable_categorical=True)
