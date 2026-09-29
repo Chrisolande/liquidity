@@ -12,6 +12,7 @@ root_dir = str(Path(__file__).resolve().parent.parent)
 if root_dir not in sys.path:
     sys.path.insert(0, root_dir)
 
+from src.config import ACTIVE_SEEDS, ENABLE_STAGE3
 from src.stages.stage1_reproduce import run_stage1
 from src.stages.stage2_gbdt_zoo import run_stage2
 from src.stages.stage3_tabpfn_priors import run_stage3
@@ -25,7 +26,7 @@ def main():
     parser.add_argument(
         "--stage",
         type=str,
-        default="audit",
+        default="all",
         choices=["1", "2", "3", "4", "5", "all", "audit"],
         help="Pipeline stage to execute (1: Reproduce, 2: GBDT Zoo, 3: TabPFN, 4: Diversity, 5: Meta-Stacker, all: Full pipeline, audit: Verification)",
     )
@@ -34,25 +35,21 @@ def main():
     parser.add_argument(
         "--enable-stage3",
         action="store_true",
-        default=False,
-        help="Enable heavy TabPFN Foundation training in Stage 3 (default: False to save time)",
+        default=ENABLE_STAGE3,
+        help="Enable TabPFN Foundation training in Stage 3 (default: True)",
     )
     args = parser.parse_args()
 
     stage = args.stage.lower()
 
     if stage in ["1", "all"]:
-        run_stage1(train_path=args.train, test_path=args.test)
+        run_stage1(train_path=args.train, test_path=args.test, seeds=ACTIVE_SEEDS)
     if stage in ["2", "all"]:
-        run_stage2(train_path=args.train, test_path=args.test)
+        run_stage2(train_path=args.train, test_path=args.test, seeds=ACTIVE_SEEDS)
     if stage == "3":
         run_stage3(train_path=args.train, test_path=args.test, enabled=True)
     elif stage == "all":
-        if args.enable_stage3:
-            run_stage3(train_path=args.train, test_path=args.test, enabled=True)
-        else:
-            print("\n>>> [Stage 3: TabPFN] Skipped during '--stage all' to accelerate iterations. Use --enable-stage3 to run.")
-            run_stage3(train_path=args.train, test_path=args.test, enabled=False)
+        run_stage3(train_path=args.train, test_path=args.test, enabled=args.enable_stage3)
     if stage in ["4", "all"]:
         run_stage4(train_path=args.train, test_path=args.test, use_tabpfn=args.enable_stage3)
     if stage in ["5", "all"]:
