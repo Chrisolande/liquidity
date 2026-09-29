@@ -345,24 +345,38 @@ def add_chris_deotte_features(df: pd.DataFrame) -> Tuple[pd.DataFrame, List[str]
 
     all_cats = base_cats + combo_cats
 
+    is_split = "_dataset" in df.columns
+    tr_mask = (df["_dataset"] == "train") if is_split else pd.Series(True, index=df.index)
+    te_mask = (df["_dataset"] == "test") if is_split else pd.Series(False, index=df.index)
+    df_train_only = df[tr_mask]
+
     for col in all_cats:
-        counts = df[col].value_counts(normalize=True)
-        feature_data[f"{col}_freq"] = df[col].map(counts).to_numpy(dtype=float)
+        # Frequencies learned strictly from Train, mapped to both
+        counts = df_train_only[col].value_counts(normalize=True)
+        feature_data[f"{col}_freq"] = df[col].map(counts).fillna(0.0).to_numpy(dtype=float)
 
-    seg_bal = df.groupby("segment")["m1_daily_avg_bal"].transform("median")
-    feature_data["bal_to_seg_median"] = df["m1_daily_avg_bal"] / (seg_bal + EPS)
+    # Medians and Means fitted strictly on Train, mapped onto both
+    seg_bal_map = df_train_only.groupby("segment")["m1_daily_avg_bal"].median().to_dict()
+    feature_data["bal_to_seg_median"] = df["m1_daily_avg_bal"] / (df["segment"].map(seg_bal_map).fillna(df_train_only["m1_daily_avg_bal"].median()) + EPS)
 
-    earn_inflow = df.groupby(earn_col)["m1_inflow_total"].transform("median")
-    feature_data["inflow_to_earn_median"] = df["m1_inflow_total"] / (earn_inflow + EPS)
+    earn_inflow_map = df_train_only.groupby(earn_col)["m1_inflow_total"].median().to_dict()
+    feature_data["inflow_to_earn_median"] = df["m1_inflow_total"] / (df[earn_col].map(earn_inflow_map).fillna(df_train_only["m1_inflow_total"].median()) + EPS)
 
-    seg_arpu = df.groupby("segment")["arpu"].transform("mean")
-    feature_data["arpu_to_seg_mean"] = df["arpu"] / (seg_arpu + EPS)
+    seg_arpu_map = df_train_only.groupby("segment")["arpu"].mean().to_dict()
+    feature_data["arpu_to_seg_mean"] = df["arpu"] / (df["segment"].map(seg_arpu_map).fillna(df_train_only["arpu"].mean()) + EPS)
 
+    # Percentile ranks computed independently for Train and Test to avoid transductive coupling
     for rcol in ["m1_daily_avg_bal", "m1_inflow_total", "agg_runway_min", "agg_exhaustion_max"]:
-        if rcol in df.columns:
-            feature_data[f"{rcol}_rank_pct"] = df[rcol].rank(pct=True).to_numpy(dtype=float)
-        elif rcol in feature_data:
-            feature_data[f"{rcol}_rank_pct"] = pd.Series(feature_data[rcol]).rank(pct=True).to_numpy(dtype=float)
+        series = df[rcol] if rcol in df.columns else (pd.Series(feature_data[rcol], index=df.index) if rcol in feature_data else None)
+        if series is not None:
+            rank_col = np.zeros(len(df), dtype=float)
+            if is_split:
+                rank_col[tr_mask] = series[tr_mask].rank(pct=True).to_numpy(dtype=float)
+                if te_mask.any():
+                    rank_col[te_mask] = series[te_mask].rank(pct=True).to_numpy(dtype=float)
+            else:
+                rank_col = series.rank(pct=True).to_numpy(dtype=float)
+            feature_data[f"{rcol}_rank_pct"] = rank_col
 
     df_out = pd.concat([df, pd.DataFrame(feature_data, index=df.index)], axis=1)
     return df_out, all_cats

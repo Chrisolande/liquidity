@@ -87,7 +87,7 @@ def train_single_model_fold(
             x_tr_sub, y_tr,
             eval_set=(x_va_sub, y_va),
             cat_features=cat_indices if cat_indices else None,
-            early_stopping_rounds=40,
+            early_stopping_rounds=75,
             verbose=False,
         )
         val_prob = model.predict_proba(x_va_sub)[:, 1]
@@ -96,9 +96,23 @@ def train_single_model_fold(
     elif cls_ == XGBClassifier:
         p["device"] = "cuda" if HAS_GPU else "cpu"
         p["tree_method"] = "hist"
-        p["enable_categorical"] = True
         p["random_state"] = seed
         p["eval_metric"] = "logloss"
+        p["early_stopping_rounds"] = 75
+
+        # Apply leak-free in-fold target encoding for interaction categoricals
+        te_cols = [c for c in sub_cats if c in x_tr_sub.columns]
+        if te_cols:
+            from src.features.encoding import apply_fold_target_encoding
+            x_tr_sub, x_va_sub, x_te_sub = apply_fold_target_encoding(
+                x_tr_sub, y_tr, x_va_sub, x_te_sub, te_cols, smoothing=20.0, seed=seed
+            )
+            x_tr_sub = x_tr_sub.drop(columns=te_cols)
+            x_va_sub = x_va_sub.drop(columns=te_cols)
+            x_te_sub = x_te_sub.drop(columns=te_cols)
+        else:
+            p["enable_categorical"] = True
+
         model = XGBClassifier(**p)
         model.fit(
             x_tr_sub, y_tr,
@@ -129,9 +143,9 @@ def train_single_model_fold(
         model = lgb.train(
             lgb_p,
             lgb_tr,
-            num_boost_round=p.get("n_estimators", 600),
+            num_boost_round=p.get("n_estimators", 750),
             valid_sets=[lgb_va],
-            callbacks=[lgb.early_stopping(40, verbose=False)],
+            callbacks=[lgb.early_stopping(75, verbose=False)],
         )
         val_prob = model.predict(x_va_sub)
         test_prob = model.predict(x_te_sub)
@@ -141,8 +155,8 @@ def train_single_model_fold(
     return np.clip(val_prob, FLOOR, CEIL), np.clip(test_prob, FLOOR, CEIL)
 
 
-def optimize_composite_weights(oof_dict: Dict[str, np.ndarray], y_true: np.ndarray) -> np.ndarray:
-    """Finds optimal weights maximizing exact competition composite score."""
+def optimize_composite_weights(oof_dict: Dict[str, np.ndarray], y_true: np.ndarray, reg_alpha: float = 0.05) -> np.ndarray:
+    """Finds optimal weights maximizing exact competition composite score with L2 regularizer."""
     names = list(oof_dict.keys())
     P_mat = np.column_stack([oof_dict[n] for n in names])
     n_models = len(names)
@@ -155,7 +169,9 @@ def optimize_composite_weights(oof_dict: Dict[str, np.ndarray], y_true: np.ndarr
         w = w / (w.sum() + EPS)
         p = np.clip(P_mat @ w, FLOOR, CEIL)
         _, _, comp = competition_score(y_true, p)
-        return -comp
+        # Regularize weights towards equal weighting to prevent overfitting collinear predictions
+        l2_pen = reg_alpha * np.sum((w - init_w) ** 2)
+        return -comp + l2_pen
 
     constraints = {"type": "eq", "fun": lambda w: np.sum(w) - 1.0}
     bounds = Bounds(0.0, 1.0)
@@ -172,8 +188,8 @@ def run_stage2(
     test_path: str = None,
     output_dir: str = "checkpoints",
     sub_dir: str = "submissions",
-    seeds: Sequence[int] = (42, 100, 2024, 777),
-    n_splits: int = 5,
+    seeds: Sequence[int] = (42, 2026),
+    n_splits: int = 10,
     k_top_features: int = 60,
 ) -> float:
     os.makedirs(output_dir, exist_ok=True)
@@ -188,7 +204,7 @@ def run_stage2(
     y_true = train_raw[target_col].to_numpy(int)
 
     print("=" * 80, flush=True)
-    print("STAGE 2: 4-SEED 5-FOLD DOMAIN GBDT ZOO (5 ARCHITECTURES)", flush=True)
+    print(f"STAGE 2: {len(seeds)}-SEED {n_splits}-FOLD DOMAIN GBDT ZOO (5 ARCHITECTURES)", flush=True)
     print("=" * 80, flush=True)
 
     # 1. Load Anchor from Stage 1 / Baseline
@@ -215,6 +231,11 @@ def run_stage2(
     X_train_clean = X_train_feat.drop(columns=drop_meta)
     X_test_clean = X_test_feat.drop(columns=[c for c in [ID_COL] if c in X_test_feat.columns])
 
+    # Construct joint multi-strata cohort keys
+    from src.baseline import build_composite_strata
+    strata = build_composite_strata(X_train_feat, target_col=target_col, n_splits=n_splits)
+    print(f"Built multi-strata cohort keys ({strata.nunique()} unique strata) for balanced CV splitting", flush=True)
+
     X_tr_sel, X_te_sel, selected_cols = run_feature_engine_selection(
         X_train_clean, y_true, X_test_clean, cat_cols=cat_cols, k_top=k_top_features, corr_threshold=0.98, seed=SEED
     )
@@ -230,11 +251,11 @@ def run_stage2(
 
     # 4. Define the 5 Zoo Architectures
     architectures = [
-        ("cb_d7_dom26", CatBoostClassifier, {"depth": 7, "learning_rate": 0.038, "l2_leaf_reg": 20.0, "iterations": 650}, dom2_cols),
-        ("cb_d6_dom35", CatBoostClassifier, {"depth": 6, "learning_rate": 0.038, "l2_leaf_reg": 10.0, "iterations": 650}, dom3_cols),
-        ("xgb_d4_dom35", XGBClassifier, {"max_depth": 4, "learning_rate": 0.035, "min_child_weight": 5.0, "subsample": 0.85, "colsample_bytree": 0.75, "reg_lambda": 2.0, "gamma": 1.5, "n_estimators": 600}, dom3_cols),
-        ("xgb_d4_triage", XGBClassifier, {"max_depth": 4, "learning_rate": 0.035, "min_child_weight": 5.0, "subsample": 0.85, "colsample_bytree": 0.75, "reg_lambda": 2.0, "gamma": 1.5, "n_estimators": 600}, dom_triage_cols),
-        ("lgb_extra", lgb.LGBMClassifier, {"num_leaves": 45, "learning_rate": 0.030, "min_child_samples": 60, "colsample_bytree": 0.60, "subsample": 0.75, "subsample_freq": 1, "reg_lambda": 5.0, "n_estimators": 600, "extra_trees": True}, list(selected_cols)),
+        ("cb_d7_dom26", CatBoostClassifier, {"depth": 7, "learning_rate": 0.038, "l2_leaf_reg": 20.0, "iterations": 750}, dom2_cols),
+        ("cb_d6_dom35", CatBoostClassifier, {"depth": 6, "learning_rate": 0.038, "l2_leaf_reg": 15.0, "iterations": 750}, dom3_cols),
+        ("xgb_d4_dom35", XGBClassifier, {"max_depth": 4, "learning_rate": 0.035, "min_child_weight": 5.0, "subsample": 0.85, "colsample_bytree": 0.75, "reg_lambda": 5.0, "reg_alpha": 0.5, "n_estimators": 750}, dom3_cols),
+        ("xgb_d4_triage", XGBClassifier, {"max_depth": 4, "learning_rate": 0.035, "min_child_weight": 5.0, "subsample": 0.85, "colsample_bytree": 0.75, "reg_lambda": 5.0, "reg_alpha": 0.5, "n_estimators": 750}, dom_triage_cols),
+        ("lgb_extra", lgb.LGBMClassifier, {"num_leaves": 45, "learning_rate": 0.030, "min_child_samples": 60, "colsample_bytree": 0.60, "subsample": 0.75, "subsample_freq": 1, "reg_lambda": 5.0, "n_estimators": 750, "extra_trees": True}, list(selected_cols)),
     ]
 
     zoo_oof: Dict[str, np.ndarray] = {}
@@ -251,7 +272,7 @@ def run_stage2(
             skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=seed_val)
             fold_test_preds = []
 
-            for fold, (trn_idx, val_idx) in enumerate(skf.split(X_tr_sel, y_true), start=1):
+            for fold, (trn_idx, val_idx) in enumerate(skf.split(X_tr_sel, strata), start=1):
                 x_tr, y_tr = X_tr_sel.iloc[trn_idx].copy(), y_true[trn_idx]
                 x_va, y_va = X_tr_sel.iloc[val_idx].copy(), y_true[val_idx]
                 x_te = X_te_sel.copy()
@@ -278,7 +299,7 @@ def run_stage2(
         zoo_test[name] = m_test_seeds
 
         ll, auc, comp = competition_score(y_true, m_oof_seeds)
-        print(f"  ==> {name} 4-Seed OOF: Comp={comp:.5f} | AUC={auc:.5f} | LL={ll:.5f} ({time.time() - t_arch:.1f}s)", flush=True)
+        print(f"  ==> {name} {len(seeds)}-Seed OOF: Comp={comp:.5f} | AUC={auc:.5f} | LL={ll:.5f} ({time.time() - t_arch:.1f}s)", flush=True)
 
     # 6. Ensemble Optimization (incorporating anchor)
     print("\n" + "=" * 80, flush=True)
@@ -293,9 +314,9 @@ def run_stage2(
         blend_candidates_test["oof_anchor"] = test_anchor
 
     candidate_names = list(blend_candidates_oof.keys())
-    weights = optimize_composite_weights(blend_candidates_oof, y_true)
+    weights = optimize_composite_weights(blend_candidates_oof, y_true, reg_alpha=0.05)
 
-    print("Stage 2 Learned Model Weights (Metric-Direct SLSQP):", flush=True)
+    print("Stage 2 Learned Model Weights (Regularized Metric-Direct SLSQP):", flush=True)
     for n, w in zip(candidate_names, weights):
         print(f"  {n:<16}: {w:.4f}", flush=True)
 
@@ -308,13 +329,14 @@ def run_stage2(
     r_ll, r_auc, r_comp = competition_score(y_true, raw_oof)
     print(f"\nRaw Zoo Blend OOF: Comp={r_comp:.5f} | AUC={r_auc:.5f} | LL={r_ll:.5f}", flush=True)
 
-    # 7. Smooth Beta Calibration
-    print("\nStep 3: Cross-fitted Beta Calibration on Zoo Blend", flush=True)
+    # 7. Calibration Check (Strict Gating to Prevent Double Calibration)
+    print("\nStep 3: Evaluating Calibration vs Raw Blend", flush=True)
     cal_oof, cal_test, _ = beta_calibrate(raw_oof, raw_test, y_true, n_splits=5, seed=SEED)
     c_ll, c_auc, c_comp = competition_score(y_true, cal_oof)
     print(f"Beta Calibrated Zoo OOF: Comp={c_comp:.5f} | AUC={c_auc:.5f} | LL={c_ll:.5f}", flush=True)
 
-    if c_comp >= r_comp and c_comp >= a_comp:
+    # Strict gating against double calibration
+    if c_comp > r_comp and c_comp > a_comp and (c_comp - r_comp) > 0.0003:
         final_oof, final_test = cal_oof, cal_test
         selected_name = "beta_calibrated_zoo"
         print(f"  --> Adopted Calibrated Zoo (+{c_comp - a_comp:+.5f} vs Anchor).", flush=True)
