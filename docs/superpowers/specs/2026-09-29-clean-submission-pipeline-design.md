@@ -1,27 +1,28 @@
-# Design Document: Clean Validation & Stabilized Competition Submission Pipeline
+# Design Document: Clean Validation, Stage 5 Preservation & Auditable Submission Pipeline
 
 **Date**: 2026-09-29  
-**Branch**: `002-clean-submission-pipeline` (or `main`)  
+**Branch**: `002-clean-submission-pipeline`  
 **Status**: Approved  
-**Author**: Antigravity Assistant & Competition Team  
+**Author**: Antigravity Assistant & Competition Engineering Team  
 
 ---
 
-## 1. Executive Summary & Objective
+## 1. Context & Architectural Principles
 
-With approximately 4 hours remaining before the competition submission deadline, this project stabilizes the modeling repository (`Chrisolande/liquidity`) by:
-1. Eliminating validation leakage (ensuring feature screening and target encodings are strictly fold-local).
-2. Disabling unconstrained out-of-fold overfitting (multi-round hill climbing against OOF targets).
-3. Stripping out test-set prevalence hacking and arbitrary temperature sharpening ($T=1.0$).
-4. Disabling test-set pseudo-labeling.
-5. Retaining genuine dual-view TabPFN foundation priors (`pfn_phys` and `pfn_champ`) and strictly eliminating surrogate fallback paths (e.g. CatBoost fallback).
-6. Fixing known runtime defects (specifically the `best_floor` reference error in `src/stages/stage5_meta_stacker.py`).
-7. Preserving raw out-of-fold and test predictions for all individual models before blending.
-8. Generating an audit run manifest (`experiment.json`) and clean `submission.csv` via a streamlined single-entry pipeline callable from `pipeline_reproduction.ipynb`.
+The repository contains an advanced, high-performing solution currently ranked approximately **#2 on the competition leaderboard**. 
+
+The goal of this work is **not** to simplify the model into a primitive baseline or delete experimental work. Rather, the objective is to:
+1. **Preserve the current improved architecture**: Stages 1 through 5, GBDT zoo, distillation students, diversity models, and the Stage 5 grand-teacher / meta-stacker remain intact.
+2. **Establish an auditable, leak-free clean validation and submission path**: A standalone execution entry point guaranteeing strict fold-local feature selection, fold-local target encoding, zero test pseudo-labels, zero temperature sharpening ($T=1.0$), zero prevalence adjustment, and zero unconstrained OOF hill climbing.
+3. **Explicitly distinguish clean validation from experimental competition optimization**: Clearly document and demarcate experimental components.
+4. **Fix known runtime defects**: Resolve the undefined `best_floor` reference in `src/stages/stage5_meta_stacker.py`.
+5. **Ensure reproducibility**: Enforce in-model determinism, save raw per-model prediction arrays, and generate an audit `experiment.json` manifest with an explicit `LEAKAGE CHECK: PASS`.
 
 ---
 
 ## 2. Architecture & Data Flow
+
+### 2.1. Clean Validation & Submission Path
 
 ```text
 Raw Train & Test CSVs
@@ -72,7 +73,7 @@ Target-Independent Feature Engineering
         ▼
 Validation Checks:
 - Verify 100% OOF coverage: assert oof_filled.all()
-- Save raw unblended arrays: oof_*.npy, test_*.npy
+- Save raw unblended arrays: artifacts/oof_*.npy, test_*.npy
         │
         ▼
 Bounded Regularized Blend (No Hill Climbing, No Sharpening)
@@ -80,75 +81,84 @@ Bounded Regularized Blend (No Hill Climbing, No Sharpening)
         │
         ▼
 Final Deliverables:
-- submissions/submission.csv
+- submissions/submission_clean.csv
 - artifacts/experiment.json (Run Manifest & LEAKAGE CHECK: PASS)
+```
+
+### 2.2. Preserved Experimental Tournament Path
+
+```text
+Stage 1 (Baseline Anchor + Hill Climbing)
+   │
+   ▼
+Stage 2 (Domain GBDT Zoo)
+   │
+   ▼
+Stage 3 (Dual TabPFN Foundation Priors)
+   │
+   ▼
+Stage 4 (Diversity: MultiStrata, Distillation Students, TabMLP)
+   │
+   ▼
+Stage 5 (Grand-Teacher Logit-Space L2 Meta-Stacker & Adaptive Optimizer)
+   │
+   ▼
+submissions/submission_stage5_final.csv (#2 Leaderboard Tournament Model)
 ```
 
 ---
 
-## 3. Component Specifications
+## 3. Component Audits & Surgical Modifications
 
-### 3.1. Clean Pipeline Module (`src/clean_pipeline.py`)
-- Coordinates the entire workflow without loading legacy Stage 1 / Baseline anchors.
-- Exposes `run_clean_pipeline(seed=42, n_splits=10, run_tabpfn=True, output_dir="artifacts", sub_dir="submissions")`.
+### 3.1. Stage 5 Meta-Stacker (`src/stages/stage5_meta_stacker.py`)
+- **Status**: **PRESERVED & AUDITED**
+- **Defect Fix**: On line 332, replace undefined `best_floor` reference with `FLOOR`.
+- **Validation**: Ensures meta-stacker inputs are genuine OOF prediction vectors from previous stages, and cross-fitted calibration is applied.
+- **Classification**: Tagged as *Experimental Meta-Stacking Path* because it optimizes alpha/weights across the combined ensemble pool.
 
-### 3.2. Model Zoo & Configurations
-1. **CatBoost (`cb_d7_dom26`)**:
-   - `depth=7, learning_rate=0.038, l2_leaf_reg=20.0, iterations=650, early_stopping_rounds=40`.
-2. **XGBoost (`xgb_d4_dom35`)**:
-   - `max_depth=4, learning_rate=0.035, min_child_weight=5.0, subsample=0.85, colsample_bytree=0.75, reg_lambda=2.0, gamma=1.5, n_estimators=600`.
-3. **LightGBM (`lgb_extra`)**:
-   - `num_leaves=45, learning_rate=0.030, min_child_samples=60, colsample_bytree=0.60, subsample=0.75, extra_trees=True, n_estimators=600`.
-4. **TabPFN Foundation Priors**:
-   - Views:
-     - `pfn_phys`: 14 features (`CHAMPION_14`).
-     - `pfn_champ`: 20 features (`CHAMPION_14` + top 6 digital/channel/bank features).
-   - Parameters: `n_estimators=4`, `ignore_pretraining_limits=True`, `batch_size=5000`.
-   - **Zero Surrogate Fallback**: Strictly remove the CatBoost fallback. If TabPFN or GPU is unavailable, raise an explicit error or toggle off via configuration flag.
+### 3.2. Clean Pipeline Runner (`src/clean_pipeline.py`)
+- **Status**: **NEW MODULE**
+- Dedicated entry point providing the leak-free, scientifically defensible evaluation and submission path.
+- Strictly encapsulates fold-local screening, fold-local target encoding, model training, raw prediction export, single-pass regularized ensembling, and run-manifest generation.
 
-### 3.3. Ensembling & Post-Processing
-- **Constrained SLSQP / NNLS Weight Optimization**:
-  - Direct minimization of LogLoss with bounds $w_i \in [0, 1]$ and equality constraint $\sum w_i = 1$.
-  - Evaluated exactly once on OOF predictions.
-- **Strictly Disabled**:
-  - Zero temperature sharpening ($T = 1.0$).
-  - Zero prevalence adjustment multipliers.
-  - Zero pseudo-labeling / student distillation.
-  - Zero iterative hill-climbing over the validation set.
+### 3.3. Foundation TabPFN (`src/models/tabpfn_model.py`)
+- **Status**: **AUDITED & CLEANED**
+- Enforces genuine foundation TabPFN execution across `pfn_phys` (14 features) and `pfn_champ` (20 features) using `ignore_pretraining_limits=True`.
+- Eliminates any CatBoost surrogate fallback branches; if GPU or TabPFN is unavailable, raises an explicit error or allows clean gating via `run_tabpfn=False`.
 
-### 3.4. Defect Corrections
-- In `src/stages/stage5_meta_stacker.py`, line 332: Replace undefined `best_floor` reference with `FLOOR`.
-- In `src/models/tabpfn_model.py` and pipeline scripts: Eliminate CatBoost fallback branches in TabPFN runner.
-
-### 3.5. In-Model Determinism Enforcement
-- Global random seeding via `seed_everything(seed)`:
-  - Python `random.seed(seed)`
-  - `os.environ["PYTHONHASHSEED"] = str(seed)`
-  - `np.random.seed(seed)`
-  - `torch.manual_seed(seed)`, `torch.cuda.manual_seed_all(seed)`
-- LightGBM:
-  - `random_state=seed, seed=seed, bagging_seed=seed+11, feature_fraction_seed=seed+22, extra_seed=seed+33, data_random_seed=seed+44`
-  - `deterministic=True, force_col_wise=True`
-- CatBoost:
-  - `random_seed=seed`, deterministic categorical processing
-- XGBoost:
-  - `random_state=seed`
-- TabPFN:
-  - `random_state=seed + fold`
-- Cross-Validation:
-  - `StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=seed)`
+### 3.4. Notebook Integration (`pipeline_reproduction.ipynb`)
+- **Status**: **STREAMLINED WITH DUAL EXECUTION**
+  - Section A: Clean, leak-free submission pipeline execution.
+  - Section B: Preserved Stage 1 through Stage 5 reproduction pipeline for tournament auditing.
 
 ---
 
-## 4. Verification Protocol
+## 4. Run Manifest Specification (`experiment.json`)
 
-1. **Compilation Check**:
-   `python -m compileall src`
-2. **OOF Completeness Assertion**:
-   Ensure `len(oof) == len(y_true)` and `oof_filled.all()`.
-3. **Submission Integrity**:
-   Verify `submission.csv` contains 30,000 rows, matching `ID`s, non-null values, and probabilities within $[0.0020, 0.9995]$.
-4. **Audit Manifest**:
-   Record Git commit, seed, fold count, feature counts per fold, models used, and `LEAKAGE CHECK: PASS`.
-5. **Determinism Verification**:
-   Verify identical prediction outputs across duplicate runs with seed 42.
+The clean pipeline outputs a standardized machine-readable JSON manifest:
+```json
+{
+  "timestamp": "2026-09-29T...",
+  "git_commit": "<hash>",
+  "seed": 42,
+  "n_splits": 10,
+  "fold_local_feature_selection": true,
+  "fold_local_target_encoding": true,
+  "pseudo_labeling": false,
+  "temperature_sharpening": false,
+  "prevalence_adjustment": false,
+  "oof_hill_climbing": false,
+  "tabpfn_enabled": true,
+  "tabpfn_views": ["pfn_phys", "pfn_champ"],
+  "tabpfn_surrogate_fallback": false,
+  "models_trained": ["cb_d7_dom26", "xgb_d4_dom35", "lgb_extra", "pfn_phys", "pfn_champ"],
+  "selected_features_per_fold": [60, 60, 60, 60, 60, 60, 60, 60, 60, 60],
+  "oof_evaluations": {
+    "auc": 0.73...,
+    "logloss": 0.23...,
+    "comp_score": 0.73...
+  },
+  "leakage_audit_status": "PASS",
+  "submission_path": "submissions/submission_clean.csv"
+}
+```
