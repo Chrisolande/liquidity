@@ -153,6 +153,8 @@ seed_everything(SEED)
 
 def get_default_dataset_paths() -> Tuple[str, str]:
     base_dirs = [
+        Path("/kaggle/input/datasets/olandeonyango/zindi-competition"),
+        Path("/kaggle/input/olandeonyango/zindi-competition"),
         Path("/kaggle/input/datasets/chrisolande2/zindi-competition"),
         Path("/kaggle/input/datasets/chrisolande/zindi-competition"),
         Path("/kaggle/input/chrisolande/zindi-competition"),
