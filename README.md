@@ -1,4 +1,4 @@
-# AI4EAC Liquidity Stress Prediction Pipeline
+# Liquidity Stress Prediction Pipeline
 
 End-to-end machine learning pipeline for predicting customer 30-day liquidity stress risk (`liquidity_stress_next_30d`) from multi-month mobile money transaction histories, agent banking behavior, and account dynamics.
 

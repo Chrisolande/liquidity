@@ -17,7 +17,7 @@ def competition_score(
     ceil: float = CEIL,
 ) -> Tuple[float, float, float]:
     """
-    Computes official AI4EAC Liquidity Stress Competition Metric:
+    Computes official Liquidity Stress Competition Metric:
       Metric = 0.40 * AUC + 0.60 * (1.0 - (LogLoss / 0.595))
     """
     y_arr = np.asarray(y_true, dtype=int)

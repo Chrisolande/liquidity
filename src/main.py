@@ -1,5 +1,5 @@
 """
-Main command-line orchestrator for AI4EAC Liquidity Stress pipeline.
+Main command-line orchestrator for Liquidity Stress prediction pipeline.
 """
 
 import argparse
@@ -22,7 +22,7 @@ from src.stages.audit import run_audit
 
 
 def main():
-    parser = argparse.ArgumentParser(description="AI4EAC Liquidity Stress Modular Prediction Pipeline")
+    parser = argparse.ArgumentParser(description="Liquidity Stress Modular Prediction Pipeline")
     parser.add_argument(
         "--stage",
         type=str,

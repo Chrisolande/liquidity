@@ -1,5 +1,5 @@
 """
-AI4EAC Liquidity Stress Prediction Modular Package.
+Liquidity Stress Prediction Modular Package.
 """
 
 from src.config import (

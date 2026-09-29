@@ -1,4 +1,4 @@
-# AI4EAC Liquidity Stress Prediction: Solution Documentation
+# Liquidity Stress Early Warning Prediction: Solution Documentation
 
 ## 1. Overview and Objectives
 - **Problem Statement**: Predict customer 30-day liquidity stress risk (`liquidity_stress_next_30d`) from multi-month mobile money transaction histories, agent banking behavior, and account dynamics.

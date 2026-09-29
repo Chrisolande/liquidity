@@ -1,5 +1,5 @@
 """
-End-to-end overnight execution script for AI4EAC Liquidity Stress prediction pipeline.
+End-to-end overnight execution script for Liquidity Stress prediction pipeline.
 Executes on full 40k train / 30k test dataset with multi-model GBDT zoo + calibration + hill-climbing meta-stacking.
 All metrics, fold-level logloss, AUC, and composite scores are tracked in real-time to run_overnight.log.
 """
@@ -43,7 +43,7 @@ def main():
 
     t_start = time.time()
     print("=" * 80)
-    print(f"AI4EAC OVERNIGHT FULL-DATASET TRAINING PIPELINE LAUNCHED")
+    print(f"OVERNIGHT FULL-DATASET TRAINING PIPELINE LAUNCHED")
     print(f"Start Timestamp: {datetime.utcnow().isoformat()} UTC")
     print(f"Tracking Log File: {LOG_FILE}")
     print("=" * 80, flush=True)
@@ -109,7 +109,7 @@ def main():
 
     elapsed = time.time() - t_start
     print("=" * 80)
-    print(f"AI4EAC OVERNIGHT PIPELINE COMPLETE")
+    print(f"OVERNIGHT PIPELINE COMPLETE")
     print(f"Total Execution Time: {elapsed / 60:.2f} minutes ({elapsed:.1f} seconds)")
     print(f"End Timestamp: {datetime.utcnow().isoformat()} UTC")
     print("=" * 80, flush=True)

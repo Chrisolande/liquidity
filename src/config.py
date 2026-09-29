@@ -1,5 +1,5 @@
 """
-Global configuration, constants, and environment utilities for AI4EAC Liquidity Stress.
+Global configuration, constants, and environment utilities for Liquidity Stress Prediction.
 """
 
 import os
@@ -181,7 +181,7 @@ def get_default_dataset_paths() -> Tuple[str, str]:
         Path("/kaggle/input/datasets/chrisolande2/zindi-competition"),
         Path("/kaggle/input/datasets/chrisolande/zindi-competition"),
         Path("/kaggle/input/chrisolande/zindi-competition"),
-        Path("/kaggle/input/ai4eac-liquidity-stress"),
+        Path("/kaggle/input/liquidity-stress"),
         Path("chrisolande/zindi-competition"),
         Path("."),
         Path("data"),
