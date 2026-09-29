@@ -76,8 +76,8 @@
 
 **Purpose**: Verify all tests pass and update documentation.
 
-- [ ] T016 [P] Update pipeline documentation and run logs in README.md
-- [ ] T017 Run full test suite across tests/ to verify all leak-free and regression tests pass
+- [X] T016 [P] Update pipeline documentation and run logs in README.md
+- [X] T017 Run full test suite across tests/ to verify all leak-free and regression tests pass
 
 ---
 

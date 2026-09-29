@@ -200,8 +200,30 @@ python3 src/main.py --stage audit
 1. Exactly 30,000 test rows matching input `ID` values.
 2. Columns strictly formatted as `['ID', 'Target']`.
 3. Zero `NaN`, `null`, or infinite values.
-4. Bounded probabilities within $[\text{FLOOR}, \text{CEIL}]$.
-5. Distribution prevalence aligning with the target population (~0.1534).
+4. Bounded probabilities within $[\text{FLOOR}=0.0020, \text{CEIL}=0.9995]$.
+5. Natural empirical training prevalence calibration (~0.1500).
+
+---
+
+## Leak-Free Validation & Benchmarking
+
+To run the automated leak-free regression test suite:
+
+```bash
+pytest tests/ -v
+```
+
+**Verified Invariants:**
+1. **Fold-Isolated Feature Screening**: Feature screening runs strictly within outer training folds with zero validation target leakage (`tests/test_leakage_invariance.py`).
+2. **Cross-Fitted Calibration**: `blend_and_calibrate()` and Stage 5 perform strictly out-of-sample probability calibration (`tests/test_calibration_crossfit.py`).
+3. **De-risked Distillation**: Stage 4 students train exclusively on labeled fold data without test pseudo-labeling or probability sharpening (`tests/test_stage4_derisk.py`).
+4. **Regularized Stacking**: Greedy OOF hill-climbing and multiplicative prevalence scaling are purged in Stage 5 (`tests/test_stage5_stacker.py`).
+
+To run the 20% shadow holdout benchmark:
+
+```bash
+python3 experiments/run_shadow_holdout_benchmark.py
+```
 
 ---
 
