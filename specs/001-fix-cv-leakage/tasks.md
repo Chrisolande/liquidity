@@ -68,7 +68,7 @@
 **Goal**: Evaluate clean leak-free pipeline against an immutable 20% shadow holdout (8,000 samples) to prove generalization advantage.  
 **Independent Test**: Execute benchmark script and confirm clean out-of-sample evaluation on holdout data.
 
-- [ ] T015 [P] [US5] Implement 20% immutable shadow holdout verification benchmark in experiments/run_shadow_holdout_benchmark.py
+- [X] T015 [P] [US5] Implement 20% immutable shadow holdout verification benchmark in experiments/run_shadow_holdout_benchmark.py
 
 ---
 
