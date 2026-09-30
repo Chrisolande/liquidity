@@ -32,11 +32,11 @@ def ensure_tabpfn_auth() -> None:
         except Exception:
             pass
 
-    if "TABPFN_TOKEN" in os.environ:
-        masked = os.environ["TABPFN_TOKEN"][:8] + "..." if len(os.environ["TABPFN_TOKEN"]) > 10 else "***"
-        print(f"TabPFN authentication token detected ({masked}).", flush=True)
-    else:
-        print("[INFO] No TABPFN_TOKEN detected in environment or Kaggle secrets. TabPFN will run with standard local weights.", flush=True)
+    if "TABPFN_TOKEN" not in os.environ or not os.environ["TABPFN_TOKEN"].strip():
+        raise RuntimeError("TabPFN requires an API token to accept its model license: set TABPFN_TOKEN via environment or Kaggle Secrets (get token at https://priorlabs.ai).")
+
+    masked = os.environ["TABPFN_TOKEN"][:8] + "..." if len(os.environ["TABPFN_TOKEN"]) > 10 else "***"
+    print(f"TabPFN authenticated successfully with token ({masked}).", flush=True)
 
 
 
