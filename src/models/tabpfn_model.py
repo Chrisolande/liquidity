@@ -32,8 +32,11 @@ def ensure_tabpfn_auth() -> None:
         except Exception:
             pass
 
-    if "TABPFN_TOKEN" not in os.environ:
-        os.environ["TABPFN_TOKEN"] = "tabpfn_sk_o1e0jhTbgybhJCKrHra9U39tH2rj8vCOAGnhiGE--DU"
+    if "TABPFN_TOKEN" in os.environ:
+        masked = os.environ["TABPFN_TOKEN"][:8] + "..." if len(os.environ["TABPFN_TOKEN"]) > 10 else "***"
+        print(f"TabPFN authentication token detected ({masked}).", flush=True)
+    else:
+        print("[INFO] No TABPFN_TOKEN detected in environment or Kaggle secrets. TabPFN will run with standard local weights.", flush=True)
 
 
 
